@@ -8,7 +8,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fetch(`${serverUrl}/api/add_designs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ designs: msg.designs })
+        body: JSON.stringify({
+          designs: msg.designs,
+          model: msg.model || null,
+          jobName: msg.jobName || null,
+          bidNumber: msg.bidNumber || null
+        })
       })
       .then(res => {
         if (!res.ok) {

@@ -1,14 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "Container button",
+  "name": "Podbase Container Button",
   "version": "1.0",
-  "description": "Adds a container creation button to the page",
+  "description": "Adds a container creation button to mfgpodbase.com/uv",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "permissions": [
     "storage"
   ],
   "content_scripts": [
     {
-      "matches": ["https://kolosus.pastebimas.lt/uv*"],
+      "matches": ["https://mfgpodbase.com/*"],
       "js": ["content.js"]
     }
   ],
@@ -16,7 +21,12 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
   "host_permissions": [
     "<all_urls>"
