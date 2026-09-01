@@ -2,7 +2,7 @@
   {
     "name": "iPad 7/8",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 7_8",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD 7_8",
     "aliases": [
       "iPad 7",
       "iPad 8",
@@ -11,13 +11,13 @@
       "iPad 10.2",
       "iPad 10.2 (9th/8th/7th Gen)"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_4x5",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "iPad 10.9 2020/ iPad 11 PRO 18/20/21/22",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 11 PRO_AIR 4 2020",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD 11 PRO_AIR 4 2020",
     "aliases": [
       "iPad 10.9",
       "iPad 11 PRO",
@@ -33,7 +33,7 @@
   {
     "name": "iPad 10.9 2022",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 10.9 2022",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD 10.9 2022",
     "aliases": [
       "iPad 10.9 2022",
       "iPad | 10.9\" 2022",
@@ -42,13 +42,13 @@
       "iPad 11 A16",
       "iPad 10.9 (10th Gen)"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_4x5",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "iPad Pro 11 2024",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD PRO 11 2024",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD PRO 11 2024",
     "aliases": [
       "iPad Pro 11 2024",
       "iPad | Pro 11\" 2024",
@@ -56,13 +56,13 @@
       "iPad Pro 11 (8th Gen)",
       "iPad Pro 11 (6th Gen)"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_4x5",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "iPad 12.9",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD PRO 12.9",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD PRO 12.9",
     "aliases": [
       "iPad 12.9",
       "Pro 12.9",
@@ -76,7 +76,7 @@
   {
     "name": "iPad 13 PRO/AIR",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD AIR 13_PRO 13",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/IPAD AIR 13_PRO 13",
     "aliases": [
       "iPad 13",
       "iPad | Air 13\" 2024",
@@ -94,7 +94,7 @@
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/Pod_Kindle",
     "aliases": [
-      "Kindle 5"
+      "Kindle 5 Kindle 6"
     ],
     "jig_id": "jig_1788183155",
     "output_mode": "direct_hotfolder"
@@ -102,7 +102,7 @@
   {
     "name": "Sleeve 13",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 13",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/POD Sleeve 13",
     "aliases": [
       "Sleeve 13",
       "Sleeve 13\"",
@@ -115,7 +115,7 @@
   {
     "name": "Sleeve 14",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 14",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/POD Sleeve 14",
     "aliases": [
       "Sleeve 14",
       "Sleeve 14\"",
@@ -128,7 +128,7 @@
   {
     "name": "Sleeve 16",
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 16",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/POD Sleeve 16",
     "aliases": [
       "Sleeve 16",
       "Sleeve 16\"",
