@@ -30,7 +30,7 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.4"
+CURRENT_VERSION = "1.0.5"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 

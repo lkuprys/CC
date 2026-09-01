@@ -14,5 +14,53 @@
     "cols": 7,
     "total_slots": 7,
     "description": ""
+  },
+  {
+    "id": "jig_1788183155",
+    "name": "F1 (Kindle)",
+    "rows": 3,
+    "cols": 7,
+    "total_slots": 21,
+    "description": "Kindle 5, Kindle 6"
+  },
+  {
+    "id": "jig_1788183249",
+    "name": "F3",
+    "rows": 2,
+    "cols": 5,
+    "total_slots": 10,
+    "description": "ipad 13 AIR, ipad 13 Pro, ipad 12.9"
+  },
+  {
+    "id": "jig_1788183532",
+    "name": "MB 9x2",
+    "rows": 2,
+    "cols": 9,
+    "total_slots": 18,
+    "description": ""
+  },
+  {
+    "id": "jig_1788183801",
+    "name": "MB 7x3",
+    "rows": 3,
+    "cols": 7,
+    "total_slots": 21,
+    "description": ""
+  },
+  {
+    "id": "jig_1788183817",
+    "name": "MB 4x3",
+    "rows": 3,
+    "cols": 4,
+    "total_slots": 12,
+    "description": ""
+  },
+  {
+    "id": "jig_1788183831",
+    "name": "MB 6x3",
+    "rows": 3,
+    "cols": 6,
+    "total_slots": 18,
+    "description": ""
   }
 ]

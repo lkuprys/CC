@@ -1,30 +1,7 @@
 [
   {
-    "name": "iPad 5 Mini (7.9)",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 5 MINI",
-    "aliases": [
-      "iPad _ Mini 5 7.9",
-      "iPad Mini 5",
-      "Mini 5"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "iPad 6 (9.7) 2018",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 6",
-    "aliases": [
-      "iPad 6",
-      "iPad 9.7"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
     "name": "iPad 7/8",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 7_8",
     "aliases": [
       "iPad 7",
@@ -38,19 +15,8 @@
     "output_mode": "direct_hotfolder"
   },
   {
-    "name": "iPad 8.3 Mini",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 8.3 MINI",
-    "aliases": [
-      "iPad 8.3",
-      "Mini 6"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
     "name": "iPad 10.9 2020/ iPad 11 PRO 18/20/21/22",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 11 PRO_AIR 4 2020",
     "aliases": [
       "iPad 10.9",
@@ -61,12 +27,12 @@
       "iPad Air 11",
       "iPad Air 10.9"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_4x5",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "iPad 10.9 2022",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD 10.9 2022",
     "aliases": [
       "iPad 10.9 2022",
@@ -81,7 +47,7 @@
   },
   {
     "name": "iPad Pro 11 2024",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD PRO 11 2024",
     "aliases": [
       "iPad Pro 11 2024",
@@ -95,7 +61,7 @@
   },
   {
     "name": "iPad 12.9",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD PRO 12.9",
     "aliases": [
       "iPad 12.9",
@@ -104,12 +70,12 @@
       "iPad Pro 12.9",
       "Pro 12.9 (6th/5th/4th/3rd Gen)"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183249",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "iPad 13 PRO/AIR",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD AIR 13_PRO 13",
     "aliases": [
       "iPad 13",
@@ -120,68 +86,22 @@
       "Air 13\" 2024",
       "Pro 13\" 2024"
     ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183249",
     "output_mode": "direct_hotfolder"
   },
   {
-    "name": "Samsung S8/S9/S9FE",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SAMSUNG S8_S9_S9FE",
-    "aliases": [
-      "Samsung S8",
-      "Samsung S9",
-      "S9FE"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Samsung Tab S8/S9/S10 ULTRA",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SAMSUNG S8_S9 ULTRA",
-    "aliases": [
-      "Samsung S8 ULTRA",
-      "Samsung S9 ULTRA",
-      "Samsung S10 ULTRA"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Kindle 5",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/KINDLE",
+    "name": "Kindle 5/6",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
+    "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/Pod_Kindle",
     "aliases": [
       "Kindle 5"
     ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Kindle 6",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Kindle W6",
-    "aliases": [
-      "Kindle 6",
-      "Kindle W6"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Notebook/Infinity Planner",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Notebook_Infinity planner",
-    "aliases": [
-      "Notebook",
-      "Infinity Planner"
-    ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183155",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "Sleeve 13",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 13",
     "aliases": [
       "Sleeve 13",
@@ -189,12 +109,12 @@
       "Laptop Sleeve 13\"",
       "Laptop Sleeve 13"
     ],
-    "jig_id": null,
+    "jig_id": "jig_1787344523",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "Sleeve 14",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 14",
     "aliases": [
       "Sleeve 14",
@@ -202,12 +122,12 @@
       "Laptop Sleeve 14\"",
       "Laptop Sleeve 14"
     ],
-    "jig_id": null,
+    "jig_id": "jig_1787344523",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "Sleeve 16",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SLEEVE 16",
     "aliases": [
       "Sleeve 16",
@@ -215,33 +135,12 @@
       "Laptop Sleeve 16\"",
       "Laptop Sleeve 16"
     ],
-    "jig_id": null,
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Samsung S8+/S9+/S9FE+",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/SAMSUNG S8+_S9+_S9FE+",
-    "aliases": [
-      "Samsung S8+",
-      "Samsung S9+"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Samsung S10FE+",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Samsusng 10FE+",
-    "aliases": [
-      "Samsung S10FE+"
-    ],
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_4x5",
     "output_mode": "direct_hotfolder"
   },
   {
     "name": "1370",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1370 Macbook",
     "aliases": [
       "1370",
@@ -251,12 +150,12 @@
       "MacBook Air 11"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
-    "name": "1398 NEW",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "name": "1398",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1398 Macbook",
     "aliases": [
       "1398 NEW",
@@ -266,12 +165,12 @@
       "MacBook Pro 15"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
     "name": "1466",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1466 Macbook",
     "aliases": [
       "1466",
@@ -281,23 +180,23 @@
       "MacBook Air 13"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
     "name": "1502",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1502 Macbook",
     "aliases": [
       "1502"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
     "name": "1707",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1707 Macbook",
     "aliases": [
       "1707",
@@ -306,12 +205,12 @@
       "A1707"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183532",
     "output_mode": "temp_folder"
   },
   {
-    "name": "1932_1706_v1",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "name": "1932_1706",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1932 1706 Macbook",
     "aliases": [
       "1932_1706_v1",
@@ -323,25 +222,12 @@
       "Macbook Pro TouchBar 13\" | A1706 / A1708 / A1989 / A2159 / A2289 / A2338 / A2251/A2338-M4"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
-    "name": "1932premium",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1932 1706 Macbook",
-    "aliases": [
-      "1932premium",
-      "1932 Premium",
-      "1932P"
-    ],
-    "file_type": "both",
-    "jig_id": "jig_2x5",
-    "output_mode": "temp_folder"
-  },
-  {
-    "name": "2141 NEW",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "name": "2141",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2141 Macbook",
     "aliases": [
       "2141 NEW",
@@ -351,12 +237,12 @@
       "MacBook Pro 16"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183532",
     "output_mode": "temp_folder"
   },
   {
     "name": "2442",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2442 Macbook",
     "aliases": [
       "2442",
@@ -373,12 +259,12 @@
       "A3434"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
-    "name": "2485 NEW",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "name": "2485",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2485 Macbook",
     "aliases": [
       "2485 NEW",
@@ -393,12 +279,12 @@
       "A3186"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183532",
     "output_mode": "temp_folder"
   },
   {
-    "name": "2681 Paprasti",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "name": "2681",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2681 Macbook",
     "aliases": [
       "2681 Paprasti",
@@ -411,12 +297,12 @@
       "MacBook Air 13.6"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
   },
   {
     "name": "2941",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2941 Macbook",
     "aliases": [
       "2941",
@@ -428,25 +314,12 @@
       "MacBook Air 15"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
-    "output_mode": "temp_folder"
-  },
-  {
-    "name": "2941 PREMIUM",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2941 Macbook",
-    "aliases": [
-      "2941 PREMIUM",
-      "2941 Premium",
-      "2941P"
-    ],
-    "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183831",
     "output_mode": "temp_folder"
   },
   {
     "name": "Neo_3403",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1932 1706 Macbook",
     "aliases": [
       "Neo_3403",
@@ -457,81 +330,19 @@
       "Macbook Neo 13"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183817",
     "output_mode": "temp_folder"
-  },
-  {
-    "name": "Premium_Macbook",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/2681 Macbook PREM",
-    "aliases": [
-      "Premium_Macbook",
-      "Premium Macbook",
-      "Macbook Premium"
-    ],
-    "file_type": "both",
-    "jig_id": "jig_2x4",
-    "output_mode": "temp_folder"
-  },
-  {
-    "name": "Shenzhen Dlican DLN-2513",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/GUNSJET 2513",
-    "aliases": [
-      "Shenzhen Dlican DLN-2513",
-      "DLN-2513",
-      "DLN 2513"
-    ],
-    "file_type": "both",
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
   },
   {
     "name": "1534",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
+    "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/1534 Macbook",
     "aliases": [
       "1534",
       "A1534"
     ],
     "file_type": "both",
-    "jig_id": "jig_2x5",
+    "jig_id": "jig_1788183801",
     "output_mode": "temp_folder"
-  },
-  {
-    "name": "Deskmat Large",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Deskmat_Large",
-    "aliases": [
-      "Deskmat Large",
-      "Deskmat_Large",
-      "Deskmat L"
-    ],
-    "jig_id": "jig_2x2",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Deskmat Small",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Deskmat_Small",
-    "aliases": [
-      "Deskmat Small",
-      "Deskmat_Small",
-      "Deskmat S"
-    ],
-    "jig_id": "jig_2x2",
-    "output_mode": "direct_hotfolder"
-  },
-  {
-    "name": "Samsung S11 Ultra",
-    "source": "\\\\\\\\192.168.1.143\\\\podbase-hotfolder\\\\BENDRAS_PODBASE_HOTFOLDER",
-    "destination": "C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/Samsusn S11 Ultra",
-    "aliases": [
-      "Samsung S11 Ultra",
-      "S11 Ultra",
-      "Samsusn S11 Ultra"
-    ],
-    "jig_id": "jig_2x5",
-    "output_mode": "direct_hotfolder"
   }
 ]
