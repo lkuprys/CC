@@ -30,7 +30,7 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.7"
+CURRENT_VERSION = "1.0.8"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 
@@ -520,22 +520,22 @@ New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 Log "Extracting ZIP archive: $ZipPath"
 Expand-Archive -LiteralPath $ZipPath -DestinationPath $StagingDir -Force
 
-Log "Deploying updated files..."
+Log "Deploying updated files to $AppDir..."
 $stagedApp = Join-Path $StagingDir "Podbase_Konteineriai"
 if (Test-Path -LiteralPath $stagedApp) {
-    Copy-Item -Path "$stagedApp\\*" -Destination $AppDir -Recurse -Force
+    Get-ChildItem -Path $stagedApp | Copy-Item -Destination $AppDir -Recurse -Force
     $stagedExt = Join-Path $StagingDir "Chrome_Extension"
     if (Test-Path -LiteralPath $stagedExt) {
         $destExt = Join-Path $ParentDir "Chrome_Extension"
         if (-not (Test-Path -LiteralPath $destExt)) { New-Item -ItemType Directory -Path $destExt -Force | Out-Null }
-        Copy-Item -Path "$stagedExt\\*" -Destination $destExt -Recurse -Force
+        Get-ChildItem -Path $stagedExt | Copy-Item -Destination $destExt -Recurse -Force
     }
     $stagedBat = Join-Path $StagingDir "Paleisti_Programa.bat"
     if (Test-Path -LiteralPath $stagedBat) {
         Copy-Item -Path $stagedBat -Destination $ParentDir -Force
     }
 } else {
-    Copy-Item -Path "$StagingDir\\*" -Destination $AppDir -Recurse -Force
+    Get-ChildItem -Path $StagingDir | Copy-Item -Destination $AppDir -Recurse -Force
 }
 
 Log "Cleaning up staging and archive..."
