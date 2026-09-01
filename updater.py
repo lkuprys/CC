@@ -30,7 +30,7 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.5"
+CURRENT_VERSION = "1.0.6"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 
@@ -481,67 +481,84 @@ def apply_update_and_restart(downloaded_file_path):
         app_dir = os.path.dirname(exe_path)
         parent_dir = os.path.dirname(app_dir)
         exe_name = os.path.basename(exe_path)
-        launch_cmd = f'start "" "{exe_path}"'
     else:
         app_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(app_dir)
         exe_path = os.path.join(app_dir, "app_gui.py")
         exe_name = "python.exe"
-        launch_cmd = f'start "" "{sys.executable}" "{exe_path}"'
 
     temp_dir = tempfile.gettempdir()
-    bat_path = os.path.join(temp_dir, "podbase_updater_install.bat")
+    ps1_path = os.path.join(temp_dir, "podbase_updater.ps1")
+    log_path = os.path.join(temp_dir, "podbase_updater.log")
+    staging_dir = os.path.join(temp_dir, "podbase_update_staging")
 
-    bat_lines = [
-        "@echo off",
-        "chcp 65001 >nul",
-        "echo Laukiama, kol programa pilnai uzsidarys...",
-        "timeout /t 2 /nobreak >nul",
-        f'taskkill /F /IM "{exe_name}" >nul 2>&1',
-        "timeout /t 1 /nobreak >nul",
-        "",
-        "set STAGING_DIR=%TEMP%\\podbase_update_staging",
-        "if exist \"%STAGING_DIR%\" (",
-        "    rmdir /s /q \"%STAGING_DIR%\" 2>nul",
-        ")",
-        "mkdir \"%STAGING_DIR%\" 2>nul",
-        "",
-        f'echo Isarchyvuojamas atnaujinimas is "{downloaded_file_path}"...',
-        f'tar -xf "{downloaded_file_path}" -C "%STAGING_DIR%" 2>nul',
-        "if %ERRORLEVEL% NEQ 0 (",
-        f'    powershell -NoProfile -Command "Expand-Archive -Path \'\'{downloaded_file_path}\'\' -DestinationPath \'\'%STAGING_DIR%\'\' -Force"',
-        ")",
-        "",
-        "echo Atnaujinami failai...",
-        f'if exist "%STAGING_DIR%\\Podbase_Konteineriai\\{exe_name}" (',
-        f'    xcopy /s /e /y /q "%STAGING_DIR%\\Podbase_Konteineriai\\*" "{app_dir}\\" >nul 2>&1',
-        f'    if exist "%STAGING_DIR%\\Chrome_Extension" (',
-        f'        xcopy /s /e /y /q "%STAGING_DIR%\\Chrome_Extension\\*" "{parent_dir}\\Chrome_Extension\\" >nul 2>&1',
-        f'    )',
-        f'    if exist "%STAGING_DIR%\\Paleisti_Programa.bat" (',
-        f'        copy /y "%STAGING_DIR%\\Paleisti_Programa.bat" "{parent_dir}\\" >nul 2>&1',
-        f'    )',
-        ") else (",
-        f'    xcopy /s /e /y /q "%STAGING_DIR%\\*" "{app_dir}\\" >nul 2>&1',
-        ")",
-        "",
-        "timeout /t 1 /nobreak >nul",
-        "echo Paleidziama atnaujinta programa...",
-        f'cd /d "{app_dir}"',
-        launch_cmd,
-        "",
-        "rem Isvalome laikinus failus",
-        "rmdir /s /q \"%STAGING_DIR%\" 2>nul",
-        f'del /f /q "{downloaded_file_path}" 2>nul',
-        "(goto) 2>nul & del \"%~f0\"",
-        "exit"
-    ]
+    script_template = """
+$LogFile = "__LOG_PATH__"
+function Log($msg) {
+    $time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "[$time] $msg" | Out-File -FilePath $LogFile -Append -Encoding utf8
+}
 
-    with open(bat_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(bat_lines))
+Log "--- STARTING PODBASE UPDATE SCRIPT ---"
+$ExePath = "__EXE_PATH__"
+$AppDir = "__APP_DIR__"
+$ParentDir = "__PARENT_DIR__"
+$ZipPath = "__ZIP_PATH__"
+$StagingDir = "__STAGING_DIR__"
+
+Log "Waiting for application to exit..."
+Start-Sleep -Seconds 2
+Get-Process -Name "__EXE_STEM__" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+
+Log "Cleaning staging directory..."
+if (Test-Path -LiteralPath $StagingDir) {
+    Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+
+Log "Extracting ZIP archive: $ZipPath"
+Expand-Archive -LiteralPath $ZipPath -DestinationPath $StagingDir -Force
+
+Log "Deploying updated files..."
+$stagedApp = Join-Path $StagingDir "Podbase_Konteineriai"
+if (Test-Path -LiteralPath $stagedApp) {
+    Copy-Item -Path "$stagedApp\\*" -Destination $AppDir -Recurse -Force
+    $stagedExt = Join-Path $StagingDir "Chrome_Extension"
+    if (Test-Path -LiteralPath $stagedExt) {
+        $destExt = Join-Path $ParentDir "Chrome_Extension"
+        if (-not (Test-Path -LiteralPath $destExt)) { New-Item -ItemType Directory -Path $destExt -Force | Out-Null }
+        Copy-Item -Path "$stagedExt\\*" -Destination $destExt -Recurse -Force
+    }
+    $stagedBat = Join-Path $StagingDir "Paleisti_Programa.bat"
+    if (Test-Path -LiteralPath $stagedBat) {
+        Copy-Item -Path $stagedBat -Destination $ParentDir -Force
+    }
+} else {
+    Copy-Item -Path "$StagingDir\\*" -Destination $AppDir -Recurse -Force
+}
+
+Log "Cleaning up staging and archive..."
+Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+
+Log "Restarting application: $ExePath"
+Start-Process -FilePath $ExePath -WorkingDirectory $AppDir
+Log "--- UPDATE COMPLETED SUCCESSFULLY ---"
+"""
+    script_content = script_template.replace("__LOG_PATH__", log_path)
+    script_content = script_content.replace("__EXE_PATH__", exe_path)
+    script_content = script_content.replace("__APP_DIR__", app_dir)
+    script_content = script_content.replace("__PARENT_DIR__", parent_dir)
+    script_content = script_content.replace("__ZIP_PATH__", downloaded_file_path)
+    script_content = script_content.replace("__STAGING_DIR__", staging_dir)
+    script_content = script_content.replace("__EXE_STEM__", os.path.splitext(exe_name)[0])
+
+    with open(ps1_path, "w", encoding="utf-8") as f:
+        f.write(script_content)
 
     subprocess.Popen(
-        ["cmd.exe", "/c", bat_path],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
         cwd=temp_dir,
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
         close_fds=True
@@ -549,7 +566,6 @@ def apply_update_and_restart(downloaded_file_path):
 
     QApplication.quit()
     sys.exit(0)
-
 
 # ----------------- PAGRINDINIS ATNAUJINTOJO VALDIKLIS (AppUpdater) -----------------
 class AppUpdater(QObject):
