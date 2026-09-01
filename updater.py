@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Automatinis programos atnaujinimų tikrinimo ir diegimo modulis.
-Palaiko GitHub Releases API, SSL fallback, semantinį versijų palyginimą,
+Palaiko GitHub Releases API, vietinį Windows curl/SSL palaikymą, semantinį versijų palyginimą,
 siuntimo progreso langą bei saugų failų pakeitimą ir persikrovimą Windows sistemoje.
 """
 
@@ -30,23 +30,8 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.2"
+CURRENT_VERSION = "1.0.3"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
-
-
-def get_ssl_context():
-    """Sukuria atsparų SSL kontekstą su fallback senesnėms ar ribotoms Windows aplinkoms."""
-    try:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.set_ciphers("DEFAULT@SECLEVEL=1:ALL:!aNULL:!eNULL")
-        return ctx
-    except Exception:
-        try:
-            return ssl._create_unverified_context()
-        except Exception:
-            return None
 
 
 def parse_version_tuple(v_str):
@@ -72,6 +57,80 @@ def is_newer_version(remote_ver, local_ver):
     return parse_version_tuple(remote_ver) > parse_version_tuple(local_ver)
 
 
+def fetch_github_release_safe(repo_slug=DEFAULT_GITHUB_REPO):
+    """
+    Patikimai nuskaito naujausią GitHub Release informaciją.
+    Prioritetas teikiamas Windows sisteminiam curl.exe (apeina visas Python OpenSSL/šifrų klaidas),
+    su fallback į Python urllib ir PowerShell.
+    """
+    url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
+    
+    # 1. BŪDAS: Windows įdiegtas curl.exe (100% atsparus OpenSSL cipher trūkumams)
+    curl_path = shutil.which("curl.exe") or r"C:\Windows\System32\curl.exe"
+    if os.path.exists(curl_path):
+        try:
+            res = subprocess.run(
+                [curl_path, "-s", "-L", "-H", "User-Agent: Podbase-Container-Studio", "-H", "Accept: application/vnd.github.v3+json", url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=12,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            )
+            if res.returncode == 0 and res.stdout:
+                raw_text = res.stdout.decode("utf-8", errors="replace")
+                data = json.loads(raw_text)
+                if isinstance(data, dict) and "tag_name" in data:
+                    return data
+        except Exception:
+            pass
+
+    # 2. BŪDAS: Python urllib su neapribotu SSL kontekstu
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    except Exception:
+        try:
+            ctx = ssl._create_unverified_context()
+        except Exception:
+            ctx = None
+
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Podbase-Container-Studio-Updater",
+            "Accept": "application/vnd.github.v3+json"
+        })
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+            if response.status == 200:
+                raw_text = response.read().decode("utf-8", errors="replace")
+                return json.loads(raw_text)
+    except Exception:
+        pass
+
+    # 3. BŪDAS: PowerShell su Windows SChannel
+    try:
+        ps_cmd = [
+            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
+            f"$res = Invoke-RestMethod -Uri '{url}' -Headers @{{'User-Agent'='Podbase'}}; "
+            f"$res | ConvertTo-Json -Depth 5"
+        ]
+        res_ps = subprocess.run(
+            ps_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=12,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        )
+        if res_ps.returncode == 0 and res_ps.stdout:
+            raw_text = res_ps.stdout.decode("utf-8", errors="replace")
+            return json.loads(raw_text)
+    except Exception:
+        pass
+
+    return None
+
+
 # ----------------- GITHUB RELEASES TIKRINIMO GIJA -----------------
 class VersionCheckWorker(QThread):
     update_available = Signal(dict)   # release_info dict
@@ -84,38 +143,14 @@ class VersionCheckWorker(QThread):
         self.current_ver = current_ver
 
     def run(self):
-        url = f"https://api.github.com/repos/{self.repo_slug}/releases/latest"
-        headers = {
-            "User-Agent": "Podbase-Container-Studio-Updater",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        data = None
-
-        # 1. Bandome per Python urllib su atspariu SSL kontekstu
         try:
-            ctx = get_ssl_context()
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, context=ctx, timeout=8) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode("utf-8"))
+            data = fetch_github_release_safe(self.repo_slug)
         except Exception as e:
-            # 2. Fallback per PowerShell (naudoja Windows SChannel SSL be OpenSSL klaidų)
-            try:
-                ps_cmd = [
-                    "powershell", "-NoProfile", "-Command",
-                    f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
-                    f"$res = Invoke-RestMethod -Uri '{url}' -Headers @{{'User-Agent'='Podbase'}}; "
-                    f"$res | ConvertTo-Json -Depth 5"
-                ]
-                res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=10)
-                if res.returncode == 0 and res.stdout.strip():
-                    data = json.loads(res.stdout)
-            except Exception as ps_err:
-                self.check_failed.emit(f"Tikrinimo klaida: {str(e)}")
-                return
+            self.check_failed.emit(f"Tikrinimo klaida: {str(e)}")
+            return
 
-        if not data:
-            self.check_failed.emit("Nepavyko gauti atsakymo iš GitHub serverio.")
+        if not data or not isinstance(data, dict) or "tag_name" not in data:
+            self.check_failed.emit("Nepavyko pasiekti GitHub atnaujinimų serverio. Patikrinkite interneto ryšį.")
             return
 
         tag_name = data.get("tag_name", "")
@@ -180,9 +215,78 @@ class DownloadWorker(QThread):
 
         temp_dir = tempfile.gettempdir()
         dest_path = os.path.join(temp_dir, self.target_filename)
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
 
+        # 1. Bandome per Windows curl.exe su progreso stebėjimu
+        curl_path = shutil.which("curl.exe") or r"C:\Windows\System32\curl.exe"
+        if os.path.exists(curl_path):
+            try:
+                # Gauname failo dydi
+                size_res = subprocess.run(
+                    [curl_path, "-sI", "-L", "-H", "User-Agent: Podbase", self.download_url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+                total_size = 0
+                header_text = size_res.stdout.decode("utf-8", errors="replace")
+                for line in header_text.splitlines():
+                    if line.lower().startswith("content-length:"):
+                        try:
+                            total_size = int(line.split(":")[1].strip())
+                        except Exception:
+                            pass
+
+                proc = subprocess.Popen(
+                    [curl_path, "-s", "-L", "-H", "User-Agent: Podbase", "-o", dest_path, self.download_url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                )
+
+                start_time = time.time()
+                while proc.poll() is None:
+                    if self._is_cancelled:
+                        proc.kill()
+                        if os.path.exists(dest_path):
+                            os.remove(dest_path)
+                        self.failed.emit("Atsisiuntimas atšauktas.")
+                        return
+
+                    if os.path.exists(dest_path):
+                        current_size = os.path.getsize(dest_path)
+                        elapsed = max(0.1, time.time() - start_time)
+                        speed_mb = (current_size / (1024 * 1024)) / elapsed
+                        if total_size > 0:
+                            pct = min(100, int((current_size / total_size) * 100))
+                            status = f"{current_size / (1024*1024):.1f} MB / {total_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
+                        else:
+                            pct = 50
+                            status = f"{current_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
+
+                        self.progress.emit(pct, status)
+                    time.sleep(0.2)
+
+                if proc.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
+                    self.finished.emit(dest_path)
+                    return
+            except Exception:
+                pass
+
+        # 2. Fallback per Python urllib
         try:
-            ctx = get_ssl_context()
+            try:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            except Exception:
+                ctx = ssl._create_unverified_context()
+
             req = urllib.request.Request(self.download_url, headers={
                 "User-Agent": "Podbase-Container-Studio-Updater"
             })
@@ -225,21 +329,6 @@ class DownloadWorker(QThread):
             return
 
         except Exception as e:
-            # Fallback atsisiuntimas per PowerShell jei urllib nesuveikia
-            try:
-                self.progress.emit(50, "Siunčiama per saugų Windows kanalą...")
-                ps_cmd = [
-                    "powershell", "-NoProfile", "-Command",
-                    f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
-                    f"(New-Object System.Net.WebClient).DownloadFile('{self.download_url}', '{dest_path}')"
-                ]
-                res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=60)
-                if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
-                    self.finished.emit(dest_path)
-                    return
-            except Exception:
-                pass
-
             if os.path.exists(dest_path):
                 try:
                     os.remove(dest_path)
@@ -412,15 +501,15 @@ def apply_update_and_restart(downloaded_file_path):
         "timeout /t 1 /nobreak >nul",
         "",
         "set STAGING_DIR=%TEMP%\\podbase_update_staging",
-        "if exist "%STAGING_DIR%" (",
-        "    rmdir /s /q "%STAGING_DIR%" 2>nul",
+        "if exist \"%STAGING_DIR%\" (",
+        "    rmdir /s /q \"%STAGING_DIR%\" 2>nul",
         ")",
-        "mkdir "%STAGING_DIR%" 2>nul",
+        "mkdir \"%STAGING_DIR%\" 2>nul",
         "",
         f'echo Isarchyvuojamas atnaujinimas is "{downloaded_file_path}"...',
         f'tar -xf "{downloaded_file_path}" -C "%STAGING_DIR%" 2>nul',
         "if %ERRORLEVEL% NEQ 0 (",
-        f'    powershell -NoProfile -Command "Expand-Archive -Path ''{downloaded_file_path}'' -DestinationPath ''%STAGING_DIR%'' -Force"',
+        f'    powershell -NoProfile -Command "Expand-Archive -Path \'\'{downloaded_file_path}\'\' -DestinationPath \'\'%STAGING_DIR%\'\' -Force"',
         ")",
         "",
         "echo Atnaujinami failai...",
@@ -442,13 +531,13 @@ def apply_update_and_restart(downloaded_file_path):
         launch_cmd,
         "",
         "rem Isvalome laikinus failus",
-        "rmdir /s /q "%STAGING_DIR%" 2>nul",
+        "rmdir /s /q \"%STAGING_DIR%\" 2>nul",
         f'del /f /q "{downloaded_file_path}" 2>nul',
         "(goto) 2>nul & del \"%~f0\"",
         "exit"
     ]
 
-    with open(bat_path, "w", encoding="utf-8") as f: # write utf-8
+    with open(bat_path, "w", encoding="utf-8") as f:
         f.write("\n".join(bat_lines))
 
     subprocess.Popen(
