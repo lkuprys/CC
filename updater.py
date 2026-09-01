@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Automatinis programos atnaujinimu tikrinimo ir diegimo modulis.
-Palaiko GitHub Releases API, semantini versiju palyginima,
-siuntimo progreso langa bei saugu failu pakeitima ir persikrovima Windows sistemoje.
+Automatinis programos atnaujinimų tikrinimo ir diegimo modulis.
+Palaiko GitHub Releases API, SSL fallback, semantinį versijų palyginimą,
+siuntimo progreso langą bei saugų failų pakeitimą ir persikrovimą Windows sistemoje.
 """
 
 import sys
 import os
 import re
+import ssl
 import json
 import time
 import shutil
@@ -29,12 +30,27 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.2"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 
+def get_ssl_context():
+    """Sukuria atsparų SSL kontekstą su fallback senesnėms ar ribotoms Windows aplinkoms."""
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1:ALL:!aNULL:!eNULL")
+        return ctx
+    except Exception:
+        try:
+            return ssl._create_unverified_context()
+        except Exception:
+            return None
+
+
 def parse_version_tuple(v_str):
-    """Pavercia versijos eilute (pvz., v1.2.3, 1.2, v2.0.0-beta) i palyginama skaiciu sarasa."""
+    """Paverčia versijos eilutę (pvz., v1.2.3, 1.2, v2.0.0-beta) į palyginamą skaičių sąrašą."""
     if not v_str:
         return (0, 0, 0)
     clean = re.sub(r'^[^\d]*', '', v_str.strip())
@@ -52,7 +68,7 @@ def parse_version_tuple(v_str):
 
 
 def is_newer_version(remote_ver, local_ver):
-    """Grazina True, jei remote_ver yra grieztai didesne uz local_ver."""
+    """Grąžina True, jei remote_ver yra griežtai didesnė už local_ver."""
     return parse_version_tuple(remote_ver) > parse_version_tuple(local_ver)
 
 
@@ -73,62 +89,73 @@ class VersionCheckWorker(QThread):
             "User-Agent": "Podbase-Container-Studio-Updater",
             "Accept": "application/vnd.github.v3+json"
         }
+        data = None
+
+        # 1. Bandome per Python urllib su atspariu SSL kontekstu
         try:
+            ctx = get_ssl_context()
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=8) as response:
-                if response.status != 200:
-                    self.check_failed.emit(f"HTTP klaida: {response.status}")
-                    return
-                data = json.loads(response.read().decode("utf-8"))
-
-            tag_name = data.get("tag_name", "")
-            remote_ver = tag_name.lstrip("v")
-            release_name = data.get("name", "") or tag_name
-            changelog = data.get("body", "") or "Pakeitimų sąrašas nenurodytas."
-            published_at = data.get("published_at", "")
-
-            # Ieskome tinkamo archyvo (.zip arba .exe) tarp assets
-            download_url = None
-            asset_name = None
-            asset_size = 0
-
-            assets = data.get("assets", [])
-            for asset in assets:
-                name = asset.get("name", "").lower()
-                if name.endswith(".zip") or name.endswith(".exe") or name.endswith(".rar"):
-                    download_url = asset.get("browser_download_url")
-                    asset_name = asset.get("name")
-                    asset_size = asset.get("size", 0)
-                    break
-
-            if not download_url and data.get("zipball_url"):
-                download_url = data.get("zipball_url")
-                asset_name = f"{self.repo_slug.replace('/', '_')}_update.zip"
-
-            if is_newer_version(remote_ver, self.current_ver):
-                self.update_available.emit({
-                    "version": remote_ver,
-                    "tag_name": tag_name,
-                    "name": release_name,
-                    "changelog": changelog,
-                    "published_at": published_at,
-                    "download_url": download_url,
-                    "asset_name": asset_name,
-                    "asset_size": asset_size,
-                    "html_url": data.get("html_url", "")
-                })
-            else:
-                self.no_update.emit(f"Jūs naudojate naujausią programos versiją (v{self.current_ver}).")
-
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                self.no_update.emit("GitHub repozitorijoje dar nėra paskelbtų atnaujinimų (Releases).")
-            else:
-                self.check_failed.emit(f"GitHub API klaida: HTTP {e.code}")
-        except urllib.error.URLError as e:
-            self.check_failed.emit(f"Nepavyko prisijungti prie interneto: {e.reason}")
+            with urllib.request.urlopen(req, context=ctx, timeout=8) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode("utf-8"))
         except Exception as e:
-            self.check_failed.emit(f"Tikrinimo klaida: {str(e)}")
+            # 2. Fallback per PowerShell (naudoja Windows SChannel SSL be OpenSSL klaidų)
+            try:
+                ps_cmd = [
+                    "powershell", "-NoProfile", "-Command",
+                    f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
+                    f"$res = Invoke-RestMethod -Uri '{url}' -Headers @{{'User-Agent'='Podbase'}}; "
+                    f"$res | ConvertTo-Json -Depth 5"
+                ]
+                res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=10)
+                if res.returncode == 0 and res.stdout.strip():
+                    data = json.loads(res.stdout)
+            except Exception as ps_err:
+                self.check_failed.emit(f"Tikrinimo klaida: {str(e)}")
+                return
+
+        if not data:
+            self.check_failed.emit("Nepavyko gauti atsakymo iš GitHub serverio.")
+            return
+
+        tag_name = data.get("tag_name", "")
+        remote_ver = tag_name.lstrip("v")
+        release_name = data.get("name", "") or tag_name
+        changelog = data.get("body", "") or "Pakeitimų sąrašas nenurodytas."
+        published_at = data.get("published_at", "")
+
+        # Ieškome tinkamo archyvo (.zip arba .exe) tarp assets
+        download_url = None
+        asset_name = None
+        asset_size = 0
+
+        assets = data.get("assets", [])
+        for asset in assets:
+            name = asset.get("name", "").lower()
+            if name.endswith(".zip") or name.endswith(".exe") or name.endswith(".rar"):
+                download_url = asset.get("browser_download_url")
+                asset_name = asset.get("name")
+                asset_size = asset.get("size", 0)
+                break
+
+        if not download_url and data.get("zipball_url"):
+            download_url = data.get("zipball_url")
+            asset_name = f"{self.repo_slug.replace('/', '_')}_update.zip"
+
+        if is_newer_version(remote_ver, self.current_ver):
+            self.update_available.emit({
+                "version": remote_ver,
+                "tag_name": tag_name,
+                "name": release_name,
+                "changelog": changelog,
+                "published_at": published_at,
+                "download_url": download_url,
+                "asset_name": asset_name,
+                "asset_size": asset_size,
+                "html_url": data.get("html_url", "")
+            })
+        else:
+            self.no_update.emit(f"Jūs naudojate naujausią programos versiją (v{self.current_ver}).")
 
 
 # ----------------- FAILŲ ATSISIUNTIMO GIJA -----------------
@@ -155,11 +182,12 @@ class DownloadWorker(QThread):
         dest_path = os.path.join(temp_dir, self.target_filename)
 
         try:
+            ctx = get_ssl_context()
             req = urllib.request.Request(self.download_url, headers={
                 "User-Agent": "Podbase-Container-Studio-Updater"
             })
 
-            with urllib.request.urlopen(req, timeout=20) as response:
+            with urllib.request.urlopen(req, context=ctx, timeout=25) as response:
                 total_size = int(response.headers.get("Content-Length", 0))
                 downloaded = 0
                 chunk_size = 64 * 1024
@@ -194,8 +222,24 @@ class DownloadWorker(QThread):
                         self.progress.emit(pct, status)
 
             self.finished.emit(dest_path)
+            return
 
         except Exception as e:
+            # Fallback atsisiuntimas per PowerShell jei urllib nesuveikia
+            try:
+                self.progress.emit(50, "Siunčiama per saugų Windows kanalą...")
+                ps_cmd = [
+                    "powershell", "-NoProfile", "-Command",
+                    f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
+                    f"(New-Object System.Net.WebClient).DownloadFile('{self.download_url}', '{dest_path}')"
+                ]
+                res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=60)
+                if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
+                    self.finished.emit(dest_path)
+                    return
+            except Exception:
+                pass
+
             if os.path.exists(dest_path):
                 try:
                     os.remove(dest_path)
@@ -344,22 +388,20 @@ class DownloadProgressDialog(MessageBoxBase):
 # ----------------- SAUGUS ATNAUJINIMO PRITAIKYMAS IR PERSIKROVIMAS -----------------
 def apply_update_and_restart(downloaded_file_path):
     if getattr(sys, "frozen", False):
-        app_dir = os.path.dirname(sys.executable)
         exe_path = sys.executable
+        app_dir = os.path.dirname(exe_path)
+        parent_dir = os.path.dirname(app_dir)
         exe_name = os.path.basename(exe_path)
+        launch_cmd = f'start "" "{exe_path}"'
     else:
         app_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(app_dir)
         exe_path = os.path.join(app_dir, "app_gui.py")
         exe_name = "python.exe"
+        launch_cmd = f'start "" "{sys.executable}" "{exe_path}"'
 
     temp_dir = tempfile.gettempdir()
     bat_path = os.path.join(temp_dir, "podbase_updater_install.bat")
-
-    is_frozen = getattr(sys, "frozen", False)
-    if is_frozen:
-        launch_cmd = f'start "" "{exe_path}"'
-    else:
-        launch_cmd = f'start "" "{sys.executable}" "{exe_path}"'
 
     bat_lines = [
         "@echo off",
@@ -368,21 +410,45 @@ def apply_update_and_restart(downloaded_file_path):
         "timeout /t 2 /nobreak >nul",
         f'taskkill /F /IM "{exe_name}" >nul 2>&1',
         "timeout /t 1 /nobreak >nul",
-        f'echo Diegiamas atnaujinimas i "{app_dir}"...',
-        f'tar -xf "{downloaded_file_path}" -C "{app_dir}" 2>nul',
-        "if %ERRORLEVEL% NEQ 0 (",
-        f'    powershell -Command "Expand-Archive -Path ''{downloaded_file_path}'' -DestinationPath ''{app_dir}'' -Force"',
+        "",
+        "set STAGING_DIR=%TEMP%\\podbase_update_staging",
+        "if exist "%STAGING_DIR%" (",
+        "    rmdir /s /q "%STAGING_DIR%" 2>nul",
         ")",
+        "mkdir "%STAGING_DIR%" 2>nul",
+        "",
+        f'echo Isarchyvuojamas atnaujinimas is "{downloaded_file_path}"...',
+        f'tar -xf "{downloaded_file_path}" -C "%STAGING_DIR%" 2>nul',
+        "if %ERRORLEVEL% NEQ 0 (",
+        f'    powershell -NoProfile -Command "Expand-Archive -Path ''{downloaded_file_path}'' -DestinationPath ''%STAGING_DIR%'' -Force"',
+        ")",
+        "",
+        "echo Atnaujinami failai...",
+        f'if exist "%STAGING_DIR%\\Podbase_Konteineriai\\{exe_name}" (',
+        f'    xcopy /s /e /y /q "%STAGING_DIR%\\Podbase_Konteineriai\\*" "{app_dir}\\" >nul 2>&1',
+        f'    if exist "%STAGING_DIR%\\Chrome_Extension" (',
+        f'        xcopy /s /e /y /q "%STAGING_DIR%\\Chrome_Extension\\*" "{parent_dir}\\Chrome_Extension\\" >nul 2>&1',
+        f'    )',
+        f'    if exist "%STAGING_DIR%\\Paleisti_Programa.bat" (',
+        f'        copy /y "%STAGING_DIR%\\Paleisti_Programa.bat" "{parent_dir}\\" >nul 2>&1',
+        f'    )',
+        ") else (",
+        f'    xcopy /s /e /y /q "%STAGING_DIR%\\*" "{app_dir}\\" >nul 2>&1',
+        ")",
+        "",
         "timeout /t 1 /nobreak >nul",
         "echo Paleidziama atnaujinta programa...",
         f'cd /d "{app_dir}"',
         launch_cmd,
+        "",
+        "rem Isvalome laikinus failus",
+        "rmdir /s /q "%STAGING_DIR%" 2>nul",
         f'del /f /q "{downloaded_file_path}" 2>nul',
         "(goto) 2>nul & del \"%~f0\"",
         "exit"
     ]
 
-    with open(bat_path, "w", encoding="utf-8") as f:
+    with open(bat_path, "w", encoding="utf-8") as f: # write utf-8
         f.write("\n".join(bat_lines))
 
     subprocess.Popen(
