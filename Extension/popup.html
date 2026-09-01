@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 250px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #121214;
+      color: #e4e4e7;
+      margin: 0;
+      padding: 16px;
+    }
+    h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: #a855f7;
+      text-transform: uppercase;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      color: #a1a1aa;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      background-color: #1e1e24;
+      border: 1px solid #3f3f46;
+      color: #f4f4f5;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #a855f7;
+      box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
+    }
+    button {
+      width: 100%;
+      background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    .status {
+      margin-top: 8px;
+      font-size: 11px;
+      text-align: center;
+      min-height: 16px;
+    }
+    .success {
+      color: #10b981;
+    }
+  </style>
+</head>
+<body>
+  <h3>UV Studio Nustatymai</h3>
+  <div class="form-group">
+    <label for="server-url">Serverio URL (IP adresas)</label>
+    <input type="text" id="server-url" placeholder="http://127.0.0.1:5000">
+  </div>
+  <button id="save-btn">Išsaugoti</button>
+  <div class="status" id="status-msg"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

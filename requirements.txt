@@ -1,0 +1,5 @@
+PySide6>=6.5.0
+QFluentWidgets>=1.6.0
+Flask>=3.0.0
+Werkzeug>=3.0.0
+pyinstaller>=6.0.0

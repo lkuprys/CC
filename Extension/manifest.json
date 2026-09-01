@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Container button",
+  "version": "1.0",
+  "description": "Adds a container creation button to the page",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://kolosus.pastebimas.lt/uv*"],
+      "js": ["content.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}
