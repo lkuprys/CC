@@ -1626,9 +1626,13 @@ class ContainerStudioInterface(QWidget):
                     shutil.copy2(found_path, dst_file)
                     total_copied += 1
                 else:
-                    self.missing_items_by_bed.setdefault(real_bed_idx, set()).add(slot_idx_0)
-                    total_missing.append(d_name)
-                    fallback_label = custom_name if custom_name else (f"PID-{re.search(r'PID[-_:\s]*(\d+)', d_name, re.I).group(1)}" if re.search(r'PID[-_:\s]*(\d+)', d_name, re.I) else d_name)
+                    pid_m = re.search(r'PID[-_:\s]*(\d+)', d_name, re.IGNORECASE)
+                    if custom_name:
+                        fallback_label = custom_name
+                    elif pid_m:
+                        fallback_label = f"PID-{pid_m.group(1)}"
+                    else:
+                        fallback_label = d_name
                     clean_lbl = re.sub(r'[\\/*?:"<>|]', "", fallback_label).strip()
                     dummy_file = os.path.join(target_container_dir, f"{num_prefix}_{clean_lbl}_TRUKSTA.txt")
                     try:

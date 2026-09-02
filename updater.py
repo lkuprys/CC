@@ -30,8 +30,9 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.0.9"
+CURRENT_VERSION = "1.1.0"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
+
 
 
 def parse_version_tuple(v_str):
@@ -475,97 +476,254 @@ class DownloadProgressDialog(MessageBoxBase):
 
 
 # ----------------- SAUGUS ATNAUJINIMO PRITAIKYMAS IR PERSIKROVIMAS -----------------
+# ----------------- SAUGUS ATNAUJINIMO PRITAIKYMAS IR PERSIKROVIMAS -----------------
 def apply_update_and_restart(downloaded_file_path):
-    if getattr(sys, "frozen", False):
+    if not downloaded_file_path or not os.path.exists(downloaded_file_path):
+        return
+
+    import zipfile
+    if not zipfile.is_zipfile(downloaded_file_path):
+        print(f"[Updater] Atsisiųstas failas nėra tinkamas ZIP archyvas: {downloaded_file_path}")
+        return
+
+    is_frozen = getattr(sys, "frozen", False)
+    if is_frozen:
         exe_path = sys.executable
+        exe_args = ""
         app_dir = os.path.dirname(exe_path)
         parent_dir = os.path.dirname(app_dir)
         exe_name = os.path.basename(exe_path)
+        exe_stem = os.path.splitext(exe_name)[0]
     else:
         app_dir = os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(app_dir)
-        exe_path = os.path.join(app_dir, "app_gui.py")
+        exe_path = sys.executable
+        exe_args = os.path.join(app_dir, "app_gui.py")
         exe_name = "python.exe"
+        exe_stem = "python"
 
+    current_pid = os.getpid()
     temp_dir = tempfile.gettempdir()
     ps1_path = os.path.join(temp_dir, "podbase_updater.ps1")
     log_path = os.path.join(temp_dir, "podbase_updater.log")
     staging_dir = os.path.join(temp_dir, "podbase_update_staging")
 
-    script_template = """
+    script_template = r"""
+$ErrorActionPreference = "Continue"
+
 $LogFile = "__LOG_PATH__"
 function Log($msg) {
     $time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "[$time] $msg" | Out-File -FilePath $LogFile -Append -Encoding utf8
 }
 
-Log "--- STARTING PODBASE UPDATE SCRIPT ---"
+Log "========================================="
+Log "STARTING PODBASE CONTAINER STUDIO UPDATER"
+Log "Target PID: __TARGET_PID__"
+Log "Exe Stem: __EXE_STEM__"
+Log "Exe Path: __EXE_PATH__"
+Log "Exe Args: __EXE_ARGS__"
+Log "App Dir: __APP_DIR__"
+Log "Parent Dir: __PARENT_DIR__"
+Log "Zip Path: __ZIP_PATH__"
+Log "Staging Dir: __STAGING_DIR__"
+Log "Log File: $LogFile"
+Log "========================================="
+
+$TargetPid = __TARGET_PID__
+$ExeStem = "__EXE_STEM__"
 $ExePath = "__EXE_PATH__"
+$ExeArgs = "__EXE_ARGS__"
 $AppDir = "__APP_DIR__"
 $ParentDir = "__PARENT_DIR__"
 $ZipPath = "__ZIP_PATH__"
 $StagingDir = "__STAGING_DIR__"
 
-Log "Waiting for application to exit..."
-Start-Sleep -Seconds 2
-Get-Process -Name "__EXE_STEM__" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 1
+# 1. Terminate running process by PID and process stem
+if ($TargetPid -and $TargetPid -gt 0) {
+    Log "Stopping target process PID $TargetPid..."
+    Stop-Process -Id $TargetPid -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $TargetPid -Timeout 6 -ErrorAction SilentlyContinue
+}
 
-Log "Cleaning staging directory..."
+if ($ExeStem -and $ExeStem -ne "python" -and $ExeStem -ne "python3") {
+    Log "Ensuring all remaining instances of $ExeStem are closed..."
+    Get-Process -Name $ExeStem -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+# 2. Wait until target executable is free and unlocked
+$targetExe = Join-Path $AppDir "$ExeStem.exe"
+if (Test-Path -LiteralPath $targetExe) {
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            $stream = [System.IO.File]::Open($targetExe, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            if ($stream) {
+                $stream.Close()
+                $stream.Dispose()
+                Log "Target executable is writable."
+                break
+            }
+        } catch {
+            Log "Target executable is still locked, waiting 1s... ($i/10)"
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
+# 3. Clean and prepare staging directory
+Log "Preparing staging directory: $StagingDir"
 if (Test-Path -LiteralPath $StagingDir) {
     Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 
+# 4. Extract update archive
 Log "Extracting ZIP archive: $ZipPath"
-Expand-Archive -LiteralPath $ZipPath -DestinationPath $StagingDir -Force
-
-Log "Deploying updated files to $AppDir..."
-$stagedApp = Join-Path $StagingDir "Podbase_Konteineriai"
-if (Test-Path -LiteralPath $stagedApp) {
-    Get-ChildItem -Path $stagedApp | Copy-Item -Destination $AppDir -Recurse -Force
-    $stagedExt = Join-Path $StagingDir "Chrome_Extension"
-    if (Test-Path -LiteralPath $stagedExt) {
-        $destExt = Join-Path $ParentDir "Chrome_Extension"
-        if (-not (Test-Path -LiteralPath $destExt)) { New-Item -ItemType Directory -Path $destExt -Force | Out-Null }
-        Get-ChildItem -Path $stagedExt | Copy-Item -Destination $destExt -Recurse -Force
-    }
-    $stagedBat = Join-Path $StagingDir "Paleisti_Programa.bat"
-    if (Test-Path -LiteralPath $stagedBat) {
-        Copy-Item -Path $stagedBat -Destination $ParentDir -Force
-    }
-} else {
-    Get-ChildItem -Path $StagingDir | Copy-Item -Destination $AppDir -Recurse -Force
+try {
+    Expand-Archive -LiteralPath $ZipPath -DestinationPath $StagingDir -Force
+    Log "Extraction completed successfully."
+} catch {
+    Log "Extraction failed: $($_.Exception.Message)"
+    exit 1
 }
 
-Log "Cleaning up staging and archive..."
+# 5. Detect payload folder structure
+$stagedApp = $null
+if (Test-Path -LiteralPath (Join-Path $StagingDir "Podbase_Konteineriai")) {
+    $stagedApp = Join-Path $StagingDir "Podbase_Konteineriai"
+} elseif (Test-Path -LiteralPath (Join-Path $StagingDir "$ExeStem.exe")) {
+    $stagedApp = $StagingDir
+} else {
+    $subDirs = Get-ChildItem -Path $StagingDir -Directory
+    if ($subDirs.Count -eq 1 -and (Test-Path (Join-Path $subDirs[0].FullName "Podbase_Konteineriai"))) {
+        $stagedApp = Join-Path $subDirs[0].FullName "Podbase_Konteineriai"
+    } elseif ($subDirs.Count -eq 1) {
+        $stagedApp = $subDirs[0].FullName
+    }
+}
+
+if (-not $stagedApp -or -not (Test-Path -LiteralPath $stagedApp)) {
+    Log "ERROR: Could not find valid application payload in staging directory!"
+    exit 1
+}
+
+Log "Deploying payload from $stagedApp to $AppDir using Robocopy..."
+
+# Backup user configs (config.json, history.json) before overwriting
+$cfgBackup = Join-Path $env:TEMP "podbase_config_backup.json"
+$histBackup = Join-Path $env:TEMP "podbase_history_backup.json"
+if (Test-Path (Join-Path $AppDir "config.json")) {
+    Copy-Item (Join-Path $AppDir "config.json") $cfgBackup -Force -ErrorAction SilentlyContinue
+    Log "Backed up config.json"
+}
+if (Test-Path (Join-Path $AppDir "history.json")) {
+    Copy-Item (Join-Path $AppDir "history.json") $histBackup -Force -ErrorAction SilentlyContinue
+    Log "Backed up history.json"
+}
+
+# Deploy application files with Robocopy
+# /E = recursive, /IS = include same files, /IT = include tweaked files, /R:5 = retry 5 times, /W:1 = wait 1 sec
+$roboArgs = @($stagedApp, $AppDir, "/E", "/IS", "/IT", "/R:5", "/W:1", "/NP")
+$resRobo = Start-Process -FilePath "robocopy.exe" -ArgumentList $roboArgs -Wait -NoNewWindow -PassThru
+Log "Robocopy exit code: $($resRobo.ExitCode)"
+
+if ($resRobo.ExitCode -ge 8) {
+    Log "ERROR: Robocopy failed with exit code $($resRobo.ExitCode)"
+    exit 1
+}
+
+# Restore user config & history
+if (Test-Path $cfgBackup) {
+    Copy-Item $cfgBackup (Join-Path $AppDir "config.json") -Force -ErrorAction SilentlyContinue
+    Remove-Item $cfgBackup -Force -ErrorAction SilentlyContinue
+    Log "Restored user config.json"
+}
+if (Test-Path $histBackup) {
+    Copy-Item $histBackup (Join-Path $AppDir "history.json") -Force -ErrorAction SilentlyContinue
+    Remove-Item $histBackup -Force -ErrorAction SilentlyContinue
+    Log "Restored user history.json"
+}
+
+# Deploy companion items (Chrome_Extension, Paleisti_Programa.bat, NAUDOJIMO_INSTRUKCIJA.md)
+$stagedExt = Join-Path $StagingDir "Chrome_Extension"
+if (Test-Path -LiteralPath $stagedExt) {
+    $destExt = Join-Path $ParentDir "Chrome_Extension"
+    Log "Deploying Chrome Extension to $destExt..."
+    Start-Process -FilePath "robocopy.exe" -ArgumentList @($stagedExt, $destExt, "/E", "/IS", "/IT", "/R:3", "/W:1", "/NP") -Wait -NoNewWindow -PassThru | Out-Null
+}
+
+$stagedBat = Join-Path $StagingDir "Paleisti_Programa.bat"
+if (Test-Path -LiteralPath $stagedBat) {
+    Log "Deploying Paleisti_Programa.bat to $ParentDir..."
+    Copy-Item -Path $stagedBat -Destination $ParentDir -Force -ErrorAction SilentlyContinue
+}
+
+$stagedDoc = Join-Path $StagingDir "NAUDOJIMO_INSTRUKCIJA.md"
+if (Test-Path -LiteralPath $stagedDoc) {
+    Copy-Item -Path $stagedDoc -Destination $ParentDir -Force -ErrorAction SilentlyContinue
+}
+
+# Clean staging and zip
+Log "Cleaning up staging files..."
 Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
 
-Log "Restarting application: $ExePath"
-Start-Process -FilePath $ExePath -WorkingDirectory $AppDir
-Log "--- UPDATE COMPLETED SUCCESSFULLY ---"
+# 6. Restart application cleanly as a visible desktop process
+Log "Restarting application: $ExePath $ExeArgs in $AppDir..."
+Start-Sleep -Milliseconds 600
+
+try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ExePath
+    if ($ExeArgs) {
+        $psi.Arguments = "`"$ExeArgs`""
+    }
+    $psi.WorkingDirectory = $AppDir
+    $psi.UseShellExecute = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    Log "Application started successfully! Process ID: $($proc.Id)"
+} catch {
+    Log "ProcessStart failed: $($_.Exception.Message). Falling back to cmd start..."
+    if ($ExeArgs) {
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "start", "`"`"", "`"$ExePath`"", "`"$ExeArgs`"" -WorkingDirectory $AppDir
+    } else {
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "start", "`"`"", "`"$ExePath`"" -WorkingDirectory $AppDir
+    }
+}
+
+Log "=== UPDATE COMPLETED SUCCESSFULLY ==="
 """
+
     script_content = script_template.replace("__LOG_PATH__", log_path)
     script_content = script_content.replace("__EXE_PATH__", exe_path)
+    script_content = script_content.replace("__EXE_ARGS__", exe_args)
     script_content = script_content.replace("__APP_DIR__", app_dir)
     script_content = script_content.replace("__PARENT_DIR__", parent_dir)
     script_content = script_content.replace("__ZIP_PATH__", downloaded_file_path)
     script_content = script_content.replace("__STAGING_DIR__", staging_dir)
-    script_content = script_content.replace("__EXE_STEM__", os.path.splitext(exe_name)[0])
+    script_content = script_content.replace("__EXE_STEM__", exe_stem)
+    script_content = script_content.replace("__TARGET_PID__", str(current_pid))
 
     with open(ps1_path, "w", encoding="utf-8") as f:
         f.write(script_content)
 
     subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
         cwd=temp_dir,
-        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         close_fds=True
     )
 
-    QApplication.quit()
-    sys.exit(0)
+    try:
+        QApplication.quit()
+    except Exception:
+        pass
+
+    # Forcefully terminate process and release all file locks immediately
+    os._exit(0)
+
 
 # ----------------- PAGRINDINIS ATNAUJINTOJO VALDIKLIS (AppUpdater) -----------------
 class AppUpdater(QObject):
