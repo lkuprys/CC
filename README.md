@@ -65,11 +65,13 @@ build.bat
 Sukompiliuota programa bus sugeneruota aplanke `dist/Podbase_Konteineriai/`.
 
 ### 4. Naujos versijos išleidimas (atnaujinimas visiems kompiuteriams)
-1. Faile `updater.py` padidinkite `CURRENT_VERSION` (pvz. `1.1.1` → `1.1.2`).
-2. Paleiskite: `py publish_release.py "Kas pasikeitė šioje versijoje"` (reikia prisijungusio `gh`).
-3. Programos, kurios atidarytos, pasiūlys atnaujinimą per 30 min. arba kito paleidimo metu.
+Viskas daroma GitHub svetainėje, nieko nereikia diegti ar kompiliuoti savo kompiuteryje:
 
-Skriptas sustos, jei tokia versija jau išleista. Atnaujinimo žurnalas kompiuteryje: `%TEMP%\podbase_updater.log`.
+1. Atidarykite https://github.com/lkuprys/CC/actions/workflows/release.yml
+2. Spauskite **„Run workflow“**, įrašykite, kas pasikeitė, ir dar kartą **„Run workflow“**.
+3. Po ~5 min. atsiras naujas leidimas skiltyje *Releases*. Atidarytos programos pasiūlys atnaujinimą per 30 min. arba kito paleidimo metu.
+
+Versijos numeris padidinamas automatiškai. Atnaujinimo žurnalas kompiuteryje: `%TEMP%\podbase_updater.log`.
 
 ---
 

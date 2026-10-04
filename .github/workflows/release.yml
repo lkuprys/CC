@@ -1,0 +1,100 @@
+name: Išleisti atnaujinimą
+
+# Paleidžiama rankiniu būdu: GitHub → Actions → „Išleisti atnaujinimą“ → Run workflow.
+# Sukompiliuoja programą Windows'e, padidina versiją, sukuria GitHub Release su ZIP.
+# Programos kompiuteriuose pasiūlys atnaujinimą per 30 min. arba kito paleidimo metu.
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Kas pasikeitė? (bus parodyta programoje atnaujinimo lange)"
+        required: true
+        type: string
+      bump:
+        description: "Versijos didinimas (dažniausiai palikite patch)"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Paimti kodą
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Nustatyti versiją
+        id: ver
+        shell: pwsh
+        run: python .github/scripts/next_version.py "${{ inputs.bump }}" >> $env:GITHUB_OUTPUT
+
+      - name: Įdiegti bibliotekas
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Patikrinti sintaksę
+        shell: pwsh
+        run: python -m py_compile app_gui.py updater.py package_release.py
+
+      - name: Kompiliuoti programą
+        shell: pwsh
+        run: >
+          python -m PyInstaller --noconfirm --onedir --windowed --name "Podbase_Konteineriai"
+          --icon="podbase_icon.ico" --add-data "models.json;." --add-data "jigs.json;."
+          --add-data "config.json;." --add-data "podbase_logo.png;." --add-data "podbase_icon.png;."
+          app_gui.py
+
+      - name: Sudaryti ZIP
+        shell: pwsh
+        run: |
+          python package_release.py
+          $zip = "dist/Podbase_Studio_v${{ steps.ver.outputs.version }}.zip"
+          if (-not (Test-Path $zip)) { throw "Nerastas $zip" }
+          python -c "import zipfile,sys; n=zipfile.ZipFile(sys.argv[1]).namelist(); assert 'Podbase_Konteineriai/Podbase_Konteineriai.exe' in n, 'nera exe'; print('ZIP OK', len(n), 'failai')" $zip
+
+      - name: Įrašyti versiją į kodą
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updater.py
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Versija v${{ steps.ver.outputs.version }}"
+            git push origin HEAD:main
+          }
+          git tag "v${{ steps.ver.outputs.version }}"
+          git push origin "v${{ steps.ver.outputs.version }}"
+
+      - name: Sukurti GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+        run: >
+          gh release create "v${{ steps.ver.outputs.version }}"
+          "dist/Podbase_Studio_v${{ steps.ver.outputs.version }}.zip"
+          --title "Podbase Container Studio v${{ steps.ver.outputs.version }}"
+          --notes "$env:NOTES" --latest
