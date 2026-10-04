@@ -8,8 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       notes:
-        description: "Kas pasikeitė? (bus parodyta programoje atnaujinimo lange)"
-        required: true
+        description: "Kas pasikeitė? (galima palikti tuščią – bus paimta iš KAS_NAUJO.md)"
+        required: false
+        default: ""
         type: string
       bump:
         description: "Versijos didinimas (dažniausiai palikite patch)"
@@ -74,12 +75,18 @@ jobs:
           if (-not (Test-Path $zip)) { throw "Nerastas $zip" }
           python -c "import zipfile,sys; n=zipfile.ZipFile(sys.argv[1]).namelist(); assert 'Podbase_Konteineriai/Podbase_Konteineriai.exe' in n, 'nera exe'; print('ZIP OK', len(n), 'failai')" $zip
 
+      - name: Paruošti pakeitimų aprašą
+        shell: pwsh
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: python .github/scripts/release_notes.py
+
       - name: Įrašyti versiją į kodą
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add updater.py
+          git add updater.py KAS_NAUJO.md
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
             git commit -m "Versija v${{ steps.ver.outputs.version }}"
@@ -92,9 +99,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          NOTES: ${{ inputs.notes }}
         run: >
           gh release create "v${{ steps.ver.outputs.version }}"
           "dist/Podbase_Studio_v${{ steps.ver.outputs.version }}.zip"
           --title "Podbase Container Studio v${{ steps.ver.outputs.version }}"
-          --notes "$env:NOTES" --latest
+          --notes-file "dist/release_notes.md" --latest
