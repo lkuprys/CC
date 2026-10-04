@@ -42,7 +42,7 @@ from flask import Flask, request, jsonify
 from werkzeug.serving import make_server
 
 # Import auto-updater module
-from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO
+from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_CHECK_INTERVAL_MS
 
 def get_res_path(filename):
     if getattr(sys, 'frozen', False):
@@ -75,6 +75,29 @@ LOGO_FILE = get_res_path("podbase_logo.png")
 ICON_FILE = get_res_path("podbase_icon.png")
 DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "Konteineriai")
 os.makedirs(DESKTOP_DIR, exist_ok=True)
+
+
+def ensure_local_data_files():
+    """
+    Naujoje instaliacijoje nukopijuoja pradinius models.json / jigs.json / config.json
+    iš sukompiliuoto paketo (_internal) šalia exe. Esamų failų NIEKADA neperrašo,
+    todėl kiekvieno kompiuterio nustatymai išlieka ir po atnaujinimų.
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+    bundle_dir = getattr(sys, '_MEIPASS', os.path.join(BASE_DIR, "_internal"))
+    for target in (MODELS_FILE, JIGS_FILE, CONFIG_FILE):
+        if os.path.exists(target):
+            continue
+        bundled = os.path.join(bundle_dir, os.path.basename(target))
+        if os.path.exists(bundled):
+            try:
+                shutil.copy2(bundled, target)
+            except Exception as e:
+                print(f"[ensure_local_data_files]: {e}")
+
+
+ensure_local_data_files()
 
 # Common shared network hotfolder roots
 NETWORK_HOTFOLDER_DEFAULT = r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER"
@@ -2353,7 +2376,7 @@ class ModelsSettingsInterface(QWidget):
         self.edit_github_repo.setPlaceholderText("pvz. lkuprys/CC")
         form.addWidget(self.edit_github_repo, 0, 1)
 
-        self.chk_auto_updates = CheckBox("Automatiškai tikrinti atnaujinimus paleidžiant programą", repo_card)
+        self.chk_auto_updates = CheckBox("Automatiškai tikrinti atnaujinimus (paleidus programą ir kas 30 min.)", repo_card)
         self.chk_auto_updates.setChecked(cfg.get("auto_check_updates", True))
         form.addWidget(self.chk_auto_updates, 1, 0, 1, 2)
 
@@ -2658,10 +2681,21 @@ class MainWindow(FluentWindow):
         self.cleanup_timer.start()
         self.run_auto_cleanup()
 
-        # Check for updates in background after 3.5 seconds
+        # Parodome, kaip baigėsi paskutinis atnaujinimas (jei programa ką tik persikrovė po jo)
+        QTimer.singleShot(1500, self.updater.show_last_update_result)
+
+        # Atnaujinimų tikrinimas: po 3.5 s nuo paleidimo ir toliau periodiškai
+        QTimer.singleShot(3500, self.run_periodic_update_check)
+        self.update_check_timer = QTimer(self)
+        self.update_check_timer.setInterval(PERIODIC_CHECK_INTERVAL_MS)
+        self.update_check_timer.timeout.connect(self.run_periodic_update_check)
+        self.update_check_timer.start()
+
+    def run_periodic_update_check(self):
+        cfg = load_app_config()
         if cfg.get("auto_check_updates", True):
             repo_slug = cfg.get("github_repo", DEFAULT_GITHUB_REPO)
-            QTimer.singleShot(3500, lambda: self.updater.check_for_updates(repo_slug=repo_slug, manual=False))
+            self.updater.check_for_updates(repo_slug=repo_slug, manual=False)
 
     def run_auto_cleanup(self):
         try:

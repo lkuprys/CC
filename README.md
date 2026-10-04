@@ -3,7 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PySide6](https://img.shields.io/badge/GUI-PySide6%20%2F%20QFluentWidgets-green.svg)](https://github.com/zhiyiYo/PyQt-Fluent-Widgets)
 [![Platform Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)]()
-[![Release](https://img.shields.io/badge/release-v1.0.0-emerald.svg)]()
+[![Release](https://img.shields.io/badge/release-v1.1.1-emerald.svg)]()
 
 **Podbase Container Studio** – profesionali UV spaudos stalų (rėmų / jigs) išdėstymo ir automatizuoto spaudos failų paruošimo sistema, skirta UV spausdintuvams (pvz., Roland, Mimaki, ColorGATE RIP).
 
@@ -30,7 +30,10 @@
   - Išsaugo visų atliktų generavimų istoriją su galimybe bet kada atkurti ar pergeneruoti užsakymą.
 - **🚀 Automatinis Atnaujinimų Tikrinimas (Auto-Updater):**
   - Fone asinchroniškai tikrina naujausias „GitHub Releases“ versijas.
+  - Tikrina paleidus programą ir kas 30 min., kol programa atidaryta.
   - Fluent UI iššokantis langas su pakeitimų sąrašu (*Changelog*), siuntimo progreso juosta ir automatiniu programos persikrovimu.
+  - Atsisiųstas ZIP patikrinamas (dydis, SHA-256, struktūra). Nepavykus atnaujinimui, atstatoma senoji versija ir programa vis tiek paleidžiama.
+  - Vietiniai `models.json`, `jigs.json`, `config.json`, `history.json` atnaujinimo metu neliečiami.
 
 ---
 
@@ -43,8 +46,8 @@
 ### 2. Įdiegimas
 ```bash
 # Klonuokite repozitoriją
-git clone https://github.com/kuprys/Podbase-Container-Studio.git
-cd Podbase-Container-Studio
+git clone https://github.com/lkuprys/CC.git
+cd CC
 
 # Įdiekite reikalingas bibliotekas
 pip install -r requirements.txt
@@ -59,6 +62,13 @@ Norėdami sukompiliuoti programą į atskirą vykdomąjį `.exe` failą:
 build.bat
 ```
 Sukompiliuota programa bus sugeneruota aplanke `dist/Podbase_Konteineriai/`.
+
+### 4. Naujos versijos išleidimas (atnaujinimas visiems kompiuteriams)
+1. Faile `updater.py` padidinkite `CURRENT_VERSION` (pvz. `1.1.1` → `1.1.2`).
+2. Paleiskite: `py publish_release.py "Kas pasikeitė šioje versijoje"` (reikia prisijungusio `gh`).
+3. Programos, kurios atidarytos, pasiūlys atnaujinimą per 30 min. arba kito paleidimo metu.
+
+Skriptas sustos, jei tokia versija jau išleista. Atnaujinimo žurnalas kompiuteryje: `%TEMP%\podbase_updater.log`.
 
 ---
 
@@ -77,7 +87,7 @@ Sukompiliuota programa bus sugeneruota aplanke `dist/Podbase_Konteineriai/`.
 {
   "theme": "LIGHT",
   "auto_cleanup_minutes": 10,
-  "github_repo": "kuprys/Podbase-Container-Studio",
+  "github_repo": "lkuprys/CC",
   "auto_check_updates": true
 }
 ```

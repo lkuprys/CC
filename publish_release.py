@@ -12,8 +12,9 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
         pass
 
 def run_cmd(cmd, check=True):
-    print(f">> Running: {cmd}")
-    res = subprocess.run(cmd, shell=True, text=True)
+    """cmd gali būti eilutė arba argumentų sąrašas (sąrašas saugesnis tekstui su kabutėmis)."""
+    print(f">> Running: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+    res = subprocess.run(cmd, shell=isinstance(cmd, str), text=True)
     if check and res.returncode != 0:
         print(f"[Error] Command failed with code {res.returncode}")
         sys.exit(res.returncode)
@@ -30,6 +31,21 @@ def main():
     zip_path = os.path.join(base_dir, "dist", zip_name)
     
     notes = sys.argv[1] if len(sys.argv) > 1 else f"Podbase Container Studio {tag} atnaujinimas su automatiniu diegimo pataisymu ir patobulinimais."
+
+    # 0. Apsauga: ta pati versija negali būti išleista antrą kartą.
+    # Kitaip programos atnaujinimo nepamatytų (versija ta pati), o senas release būtų perrašytas.
+    existing_remote = subprocess.run(
+        ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"],
+        capture_output=True, text=True
+    ).stdout.strip()
+    existing_release = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", "lkuprys/CC"],
+        capture_output=True, text=True
+    ).returncode == 0
+    if existing_remote or existing_release:
+        print(f"[Klaida] Versija {tag} jau isleista GitHub'e.")
+        print("Padidinkite CURRENT_VERSION faile updater.py (pvz. 1.1.1 -> 1.1.2) ir paleiskite is naujo.")
+        sys.exit(1)
 
     print("==================================================================")
     print(f"  PRADEDAMAS AUTOMATINIS VERSIJOS {tag} ISLEIDIMAS")
@@ -55,22 +71,19 @@ def main():
     print("\n[3/5] Keliame pakeitimus i Git repozitorija...")
     run_cmd("git add -A")
     # Commit if there are changes
-    run_cmd(f'git commit -m "release: {tag} - {notes}"', check=False)
+    run_cmd(["git", "commit", "-m", f"release: {tag} - {notes}"], check=False)
     run_cmd("git push origin main")
 
     # 4. Git tag
     print(f"\n[4/5] Kuriame ir keliame Git zyma {tag}...")
-    run_cmd(f'git tag -f "{tag}"', check=False)
-    run_cmd(f'git push -f origin "{tag}"')
+    run_cmd(["git", "tag", tag])
+    run_cmd(["git", "push", "origin", tag])
 
     # 5. GitHub Release sukurimas per gh CLI
     print(f"\n[5/5] Skelbiame GitHub Release ir prisegame {zip_name}...")
     
-    create_cmd = f'gh release create "{tag}" "{zip_path}" --title "{release_title}" --notes "{notes}" --repo lkuprys/CC'
-    res = run_cmd(create_cmd, check=False)
-    if res != 0:
-        print("[Notice] Release jau egzistuoja, atnaujinamas prisegtas zip failas...")
-        run_cmd(f'gh release upload "{tag}" "{zip_path}" --clobber --repo lkuprys/CC')
+    run_cmd(["gh", "release", "create", tag, zip_path,
+             "--title", release_title, "--notes", notes, "--latest", "--repo", "lkuprys/CC"])
 
     print("\n==================================================================")
     print(f"  [OK] VERSIJA {tag} SEKMINGAI PASKELBTA GITHUB RELEASES!")

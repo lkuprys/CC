@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 Automatinis programos atnaujinimų tikrinimo ir diegimo modulis.
-Palaiko GitHub Releases API, vietinį Windows curl/SSL palaikymą, semantinį versijų palyginimą,
-siuntimo progreso langą bei saugų failų pakeitimą ir persikrovimą Windows sistemoje.
+
+Eiga:
+1. VersionCheckWorker per GitHub Releases API suranda naujausią leidimą ir jo
+   Podbase_Studio_vX.Y.Z.zip failą.
+2. DownloadWorker atsisiunčia ZIP ir patikrina jį (dydis, SHA-256, struktūra).
+3. apply_update_and_restart() išarchyvuoja ZIP, paleidžia PowerShell skriptą ir
+   užbaigia programą. Skriptas pakeičia failus (su atsargine kopija ir atstatymu
+   klaidos atveju) ir VISADA iš naujo paleidžia programą.
+4. Kito paleidimo metu show_last_update_result() parodo, ar atnaujinimas pavyko.
+
+Žurnalas: %TEMP%\\podbase_updater.log
 """
 
 import sys
@@ -12,6 +21,8 @@ import ssl
 import json
 import time
 import shutil
+import hashlib
+import zipfile
 import tempfile
 import subprocess
 import urllib.request
@@ -30,9 +41,29 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.1.0"
+CURRENT_VERSION = "1.1.1"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
+# Release ZIP pavadinimas, kurį sukuria package_release.py
+RELEASE_ASSET_PATTERN = re.compile(r"^Podbase_Studio_v[\d.]+\.zip$", re.IGNORECASE)
+# Programos aplankas ZIP viduje ir jo exe
+PAYLOAD_DIR_NAME = "Podbase_Konteineriai"
+PAYLOAD_EXE_NAME = "Podbase_Konteineriai.exe"
+
+# Kaip dažnai tikrinti atnaujinimus, kol programa atidaryta
+PERIODIC_CHECK_INTERVAL_MS = 30 * 60 * 1000
+# Kiek laiko netrukdyti po „Priminti vėliau“
+POSTPONE_SECONDS = 4 * 3600
+
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def _temp_path(name):
+    return os.path.join(tempfile.gettempdir(), name)
+
+
+UPDATER_LOG_PATH = _temp_path("podbase_updater.log")
+UPDATE_RESULT_PATH = _temp_path("podbase_update_result.json")
 
 
 def parse_version_tuple(v_str):
@@ -58,53 +89,50 @@ def is_newer_version(remote_ver, local_ver):
     return parse_version_tuple(remote_ver) > parse_version_tuple(local_ver)
 
 
+def _find_curl():
+    curl_path = shutil.which("curl.exe") or r"C:\Windows\System32\curl.exe"
+    return curl_path if os.path.exists(curl_path) else None
+
+
 def fetch_github_release_safe(repo_slug=DEFAULT_GITHUB_REPO):
     """
-    Patikimai nuskaito naujausią GitHub Release informaciją.
-    Prioritetas teikiamas Windows sisteminiam curl.exe (apeina visas Python OpenSSL/šifrų klaidas),
-    su fallback į Python urllib ir PowerShell.
+    Nuskaito naujausią GitHub Release informaciją.
+    Pirmiausia Windows curl.exe (naudoja sistemos sertifikatus), tada Python urllib,
+    tada PowerShell. Visais atvejais SSL sertifikatas tikrinamas.
     """
     url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
-    
-    # 1. BŪDAS: Windows įdiegtas curl.exe (100% atsparus OpenSSL cipher trūkumams)
-    curl_path = shutil.which("curl.exe") or r"C:\Windows\System32\curl.exe"
-    if os.path.exists(curl_path):
+
+    # 1. BŪDAS: Windows curl.exe
+    curl_path = _find_curl()
+    if curl_path:
         try:
             res = subprocess.run(
-                [curl_path, "-s", "-L", "-H", "User-Agent: Podbase-Container-Studio", "-H", "Accept: application/vnd.github.v3+json", url],
+                [curl_path, "-s", "-f", "-L", "--max-time", "12",
+                 "-H", "User-Agent: Podbase-Container-Studio",
+                 "-H", "Accept: application/vnd.github+json", url],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=12,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                timeout=15,
+                creationflags=_NO_WINDOW
             )
             if res.returncode == 0 and res.stdout:
-                raw_text = res.stdout.decode("utf-8", errors="replace")
-                data = json.loads(raw_text)
+                data = json.loads(res.stdout.decode("utf-8", errors="replace"))
                 if isinstance(data, dict) and "tag_name" in data:
                     return data
         except Exception:
             pass
 
-    # 2. BŪDAS: Python urllib su neapribotu SSL kontekstu
-    try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    except Exception:
-        try:
-            ctx = ssl._create_unverified_context()
-        except Exception:
-            ctx = None
-
+    # 2. BŪDAS: Python urllib (su sertifikato tikrinimu)
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Podbase-Container-Studio-Updater",
-            "Accept": "application/vnd.github.v3+json"
+            "Accept": "application/vnd.github+json"
         })
-        with urllib.request.urlopen(req, context=ctx, timeout=10) as response:
+        with urllib.request.urlopen(req, context=ssl.create_default_context(), timeout=10) as response:
             if response.status == 200:
-                raw_text = response.read().decode("utf-8", errors="replace")
-                return json.loads(raw_text)
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+                if isinstance(data, dict) and "tag_name" in data:
+                    return data
     except Exception:
         pass
 
@@ -112,24 +140,68 @@ def fetch_github_release_safe(repo_slug=DEFAULT_GITHUB_REPO):
     try:
         ps_cmd = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-            f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; "
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
             f"$res = Invoke-RestMethod -Uri '{url}' -Headers @{{'User-Agent'='Podbase'}}; "
-            f"$res | ConvertTo-Json -Depth 5"
+            "$res | ConvertTo-Json -Depth 5"
         ]
         res_ps = subprocess.run(
             ps_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=12,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            timeout=15,
+            creationflags=_NO_WINDOW
         )
         if res_ps.returncode == 0 and res_ps.stdout:
-            raw_text = res_ps.stdout.decode("utf-8", errors="replace")
-            return json.loads(raw_text)
+            data = json.loads(res_ps.stdout.decode("utf-8", errors="replace"))
+            if isinstance(data, dict) and "tag_name" in data:
+                return data
     except Exception:
         pass
 
     return None
+
+
+def select_release_asset(release_data):
+    """Grąžina tinkamą release ZIP asset'ą arba None. Kitų failų (source code, .exe, .rar) neimame."""
+    for asset in release_data.get("assets", []) or []:
+        if RELEASE_ASSET_PATTERN.match(asset.get("name", "")):
+            return asset
+    return None
+
+
+def validate_update_zip(zip_path, expected_size=0, expected_sha256=None):
+    """Patikrina atsisiųstą ZIP. Grąžina (True, "") arba (False, klaidos_tekstas)."""
+    if not zip_path or not os.path.exists(zip_path):
+        return False, "Atsisiųstas failas nerastas."
+
+    actual_size = os.path.getsize(zip_path)
+    if expected_size and actual_size != expected_size:
+        return False, f"Atsisiųstas failas nepilnas ({actual_size} iš {expected_size} baitų)."
+
+    if expected_sha256:
+        h = hashlib.sha256()
+        with open(zip_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        if h.hexdigest().lower() != expected_sha256.lower():
+            return False, "Atsisiųsto failo kontrolinė suma nesutampa."
+
+    if not zipfile.is_zipfile(zip_path):
+        return False, "Atsisiųstas failas nėra ZIP archyvas."
+
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = set(n.replace("\\", "/") for n in zf.namelist())
+            bad = zf.testzip()
+    except Exception as e:
+        return False, f"Nepavyko perskaityti ZIP: {e}"
+
+    if bad:
+        return False, f"ZIP archyvas sugadintas (failas {bad})."
+    if f"{PAYLOAD_DIR_NAME}/{PAYLOAD_EXE_NAME}" not in names:
+        return False, f"ZIP archyve nėra {PAYLOAD_DIR_NAME}/{PAYLOAD_EXE_NAME}."
+
+    return True, ""
 
 
 # ----------------- GITHUB RELEASES TIKRINIMO GIJA -----------------
@@ -140,7 +212,7 @@ class VersionCheckWorker(QThread):
 
     def __init__(self, repo_slug=DEFAULT_GITHUB_REPO, current_ver=CURRENT_VERSION):
         super().__init__()
-        self.repo_slug = repo_slug.strip() or DEFAULT_GITHUB_REPO
+        self.repo_slug = (repo_slug or "").strip() or DEFAULT_GITHUB_REPO
         self.current_ver = current_ver
 
     def run(self):
@@ -155,187 +227,150 @@ class VersionCheckWorker(QThread):
             return
 
         tag_name = data.get("tag_name", "")
-        remote_ver = tag_name.lstrip("v")
-        release_name = data.get("name", "") or tag_name
-        changelog = data.get("body", "") or "Pakeitimų sąrašas nenurodytas."
-        published_at = data.get("published_at", "")
+        remote_ver = tag_name.lstrip("vV")
 
-        # Ieškome tinkamo archyvo (.zip arba .exe) tarp assets
-        download_url = None
-        asset_name = None
-        asset_size = 0
-
-        assets = data.get("assets", [])
-        for asset in assets:
-            name = asset.get("name", "").lower()
-            if name.endswith(".zip") or name.endswith(".exe") or name.endswith(".rar"):
-                download_url = asset.get("browser_download_url")
-                asset_name = asset.get("name")
-                asset_size = asset.get("size", 0)
-                break
-
-        if not download_url and data.get("zipball_url"):
-            download_url = data.get("zipball_url")
-            asset_name = f"{self.repo_slug.replace('/', '_')}_update.zip"
-
-        if is_newer_version(remote_ver, self.current_ver):
-            self.update_available.emit({
-                "version": remote_ver,
-                "tag_name": tag_name,
-                "name": release_name,
-                "changelog": changelog,
-                "published_at": published_at,
-                "download_url": download_url,
-                "asset_name": asset_name,
-                "asset_size": asset_size,
-                "html_url": data.get("html_url", "")
-            })
-        else:
+        if not is_newer_version(remote_ver, self.current_ver):
             self.no_update.emit(f"Jūs naudojate naujausią programos versiją (v{self.current_ver}).")
+            return
+
+        asset = select_release_asset(data)
+        sha256 = None
+        if asset:
+            digest = asset.get("digest") or ""
+            if digest.lower().startswith("sha256:"):
+                sha256 = digest.split(":", 1)[1]
+
+        self.update_available.emit({
+            "version": remote_ver,
+            "tag_name": tag_name,
+            "name": data.get("name", "") or tag_name,
+            "changelog": data.get("body", "") or "Pakeitimų sąrašas nenurodytas.",
+            "published_at": data.get("published_at", ""),
+            "download_url": asset.get("browser_download_url") if asset else None,
+            "asset_name": asset.get("name") if asset else None,
+            "asset_size": int(asset.get("size", 0) or 0) if asset else 0,
+            "asset_sha256": sha256,
+            "html_url": data.get("html_url", "")
+        })
 
 
 # ----------------- FAILŲ ATSISIUNTIMO GIJA -----------------
 class DownloadWorker(QThread):
-    progress = Signal(int, str)       # (procentai, greicio/busenos tekstas)
-    finished = Signal(str)            # issaugoto failo kelias
+    progress = Signal(int, str)       # (procentai, greičio/būsenos tekstas)
+    finished = Signal(str)            # patikrinto failo kelias
     failed = Signal(str)              # klaidos tekstas
 
-    def __init__(self, download_url, target_filename="podbase_update.zip"):
+    def __init__(self, download_url, expected_size=0, expected_sha256=None,
+                 target_filename="podbase_update.zip"):
         super().__init__()
         self.download_url = download_url
+        self.expected_size = expected_size or 0
+        self.expected_sha256 = expected_sha256
         self.target_filename = target_filename
         self._is_cancelled = False
 
     def cancel(self):
         self._is_cancelled = True
 
+    def _remove(self, path):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def _emit_progress(self, current_size, start_time):
+        elapsed = max(0.1, time.time() - start_time)
+        speed_mb = (current_size / (1024 * 1024)) / elapsed
+        total = self.expected_size
+        if total > 0:
+            pct = min(100, int((current_size / total) * 100))
+            status = f"{current_size / (1024*1024):.1f} MB / {total / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
+        else:
+            pct = 0
+            status = f"{current_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
+        self.progress.emit(pct, status)
+
+    def _download_with_curl(self, dest_path):
+        """Grąžina True (pavyko), False (nepavyko) arba None (atšaukta)."""
+        curl_path = _find_curl()
+        if not curl_path:
+            return False
+        try:
+            proc = subprocess.Popen(
+                [curl_path, "-s", "-f", "-L", "--retry", "2", "--connect-timeout", "15",
+                 "-H", "User-Agent: Podbase-Container-Studio", "-o", dest_path, self.download_url],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=_NO_WINDOW
+            )
+            start_time = time.time()
+            while proc.poll() is None:
+                if self._is_cancelled:
+                    proc.kill()
+                    return None
+                if os.path.exists(dest_path):
+                    self._emit_progress(os.path.getsize(dest_path), start_time)
+                time.sleep(0.2)
+            return proc.returncode == 0 and os.path.exists(dest_path)
+        except Exception:
+            return False
+
+    def _download_with_urllib(self, dest_path):
+        """Grąžina True (pavyko), None (atšaukta) arba iškelia klaidą."""
+        req = urllib.request.Request(self.download_url, headers={
+            "User-Agent": "Podbase-Container-Studio-Updater"
+        })
+        with urllib.request.urlopen(req, context=ssl.create_default_context(), timeout=30) as response:
+            start_time = time.time()
+            downloaded = 0
+            with open(dest_path, "wb") as out_file:
+                while True:
+                    if self._is_cancelled:
+                        return None
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    self._emit_progress(downloaded, start_time)
+        return True
+
     def run(self):
         if not self.download_url:
             self.failed.emit("Nėra atnaujinimo failo atsisiuntimo nuorodos.")
             return
 
-        temp_dir = tempfile.gettempdir()
-        dest_path = os.path.join(temp_dir, self.target_filename)
-        if os.path.exists(dest_path):
-            try:
-                os.remove(dest_path)
-            except Exception:
-                pass
+        dest_path = _temp_path(self.target_filename)
+        self._remove(dest_path)
 
-        # 1. Bandome per Windows curl.exe su progreso stebėjimu
-        curl_path = shutil.which("curl.exe") or r"C:\Windows\System32\curl.exe"
-        if os.path.exists(curl_path):
-            try:
-                # Gauname failo dydi
-                size_res = subprocess.run(
-                    [curl_path, "-sI", "-L", "-H", "User-Agent: Podbase", self.download_url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=10,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                )
-                total_size = 0
-                header_text = size_res.stdout.decode("utf-8", errors="replace")
-                for line in header_text.splitlines():
-                    if line.lower().startswith("content-length:"):
-                        try:
-                            total_size = int(line.split(":")[1].strip())
-                        except Exception:
-                            pass
-
-                proc = subprocess.Popen(
-                    [curl_path, "-s", "-L", "-H", "User-Agent: Podbase", "-o", dest_path, self.download_url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                )
-
-                start_time = time.time()
-                while proc.poll() is None:
-                    if self._is_cancelled:
-                        proc.kill()
-                        if os.path.exists(dest_path):
-                            os.remove(dest_path)
-                        self.failed.emit("Atsisiuntimas atšauktas.")
-                        return
-
-                    if os.path.exists(dest_path):
-                        current_size = os.path.getsize(dest_path)
-                        elapsed = max(0.1, time.time() - start_time)
-                        speed_mb = (current_size / (1024 * 1024)) / elapsed
-                        if total_size > 0:
-                            pct = min(100, int((current_size / total_size) * 100))
-                            status = f"{current_size / (1024*1024):.1f} MB / {total_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
-                        else:
-                            pct = 50
-                            status = f"{current_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
-
-                        self.progress.emit(pct, status)
-                    time.sleep(0.2)
-
-                if proc.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
-                    self.finished.emit(dest_path)
-                    return
-            except Exception:
-                pass
-
-        # 2. Fallback per Python urllib
-        try:
-            try:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-            except Exception:
-                ctx = ssl._create_unverified_context()
-
-            req = urllib.request.Request(self.download_url, headers={
-                "User-Agent": "Podbase-Container-Studio-Updater"
-            })
-
-            with urllib.request.urlopen(req, context=ctx, timeout=25) as response:
-                total_size = int(response.headers.get("Content-Length", 0))
-                downloaded = 0
-                chunk_size = 64 * 1024
-                start_time = time.time()
-
-                with open(dest_path, "wb") as out_file:
-                    while True:
-                        if self._is_cancelled:
-                            out_file.close()
-                            if os.path.exists(dest_path):
-                                os.remove(dest_path)
-                            self.failed.emit("Atsisiuntimas atšauktas.")
-                            return
-
-                        chunk = response.read(chunk_size)
-                        if not chunk:
-                            break
-
-                        out_file.write(chunk)
-                        downloaded += len(chunk)
-
-                        elapsed = max(0.1, time.time() - start_time)
-                        speed_mb = (downloaded / (1024 * 1024)) / elapsed
-
-                        if total_size > 0:
-                            pct = int((downloaded / total_size) * 100)
-                            status = f"{downloaded / (1024*1024):.1f} MB / {total_size / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
-                        else:
-                            pct = 0
-                            status = f"{downloaded / (1024*1024):.1f} MB ({speed_mb:.1f} MB/s)"
-
-                        self.progress.emit(pct, status)
-
-            self.finished.emit(dest_path)
+        result = self._download_with_curl(dest_path)
+        if result is None:
+            self._remove(dest_path)
+            self.failed.emit("Atsisiuntimas atšauktas.")
             return
 
-        except Exception as e:
-            if os.path.exists(dest_path):
-                try:
-                    os.remove(dest_path)
-                except Exception:
-                    pass
-            self.failed.emit(f"Klaida siunčiant atnaujinimą: {str(e)}")
+        if not result:
+            self._remove(dest_path)
+            try:
+                result = self._download_with_urllib(dest_path)
+            except Exception as e:
+                self._remove(dest_path)
+                self.failed.emit(f"Klaida siunčiant atnaujinimą: {str(e)}")
+                return
+            if result is None:
+                self._remove(dest_path)
+                self.failed.emit("Atsisiuntimas atšauktas.")
+                return
+
+        ok, err = validate_update_zip(dest_path, self.expected_size, self.expected_sha256)
+        if not ok:
+            self._remove(dest_path)
+            self.failed.emit(err)
+            return
+
+        self.progress.emit(100, "Atsisiųsta ir patikrinta.")
+        self.finished.emit(dest_path)
 
 
 # ----------------- MODERNUS ATNAUJINIMO PATVIRTINIMO DIALOGAS -----------------
@@ -475,254 +510,270 @@ class DownloadProgressDialog(MessageBoxBase):
         self.lbl_status.setText(status_text)
 
 
+
 # ----------------- SAUGUS ATNAUJINIMO PRITAIKYMAS IR PERSIKROVIMAS -----------------
-# ----------------- SAUGUS ATNAUJINIMO PRITAIKYMAS IR PERSIKROVIMAS -----------------
-def apply_update_and_restart(downloaded_file_path):
-    if not downloaded_file_path or not os.path.exists(downloaded_file_path):
-        return
+# PowerShell skriptas. Reikšmės įstatomos kaip PowerShell eilutės viengubose kabutėse
+# (žr. _ps_quote), todėl keliai su $, ` ar lietuviškomis raidėmis nesugadinami.
+# Skriptas rašomas UTF-8 su BOM, kad Windows PowerShell 5.1 teisingai perskaitytų raides.
+UPDATER_PS_TEMPLATE = r"""
+$ErrorActionPreference = 'Stop'
 
-    import zipfile
-    if not zipfile.is_zipfile(downloaded_file_path):
-        print(f"[Updater] Atsisiųstas failas nėra tinkamas ZIP archyvas: {downloaded_file_path}")
-        return
+$LogFile    = __LOG_PATH__
+$ResultFile = __RESULT_PATH__
+$TargetPid  = __TARGET_PID__
+$ExePath    = __EXE_PATH__
+$ExeStem    = __EXE_STEM__
+$AppDir     = __APP_DIR__
+$ParentDir  = __PARENT_DIR__
+$StagingDir = __STAGING_DIR__
+$StagedApp  = __STAGED_APP__
+$ZipPath    = __ZIP_PATH__
+$NewVersion = __NEW_VERSION__
+$OldVersion = __OLD_VERSION__
 
-    is_frozen = getattr(sys, "frozen", False)
-    if is_frozen:
-        exe_path = sys.executable
-        exe_args = ""
-        app_dir = os.path.dirname(exe_path)
-        parent_dir = os.path.dirname(app_dir)
-        exe_name = os.path.basename(exe_path)
-        exe_stem = os.path.splitext(exe_name)[0]
-    else:
-        app_dir = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(app_dir)
-        exe_path = sys.executable
-        exe_args = os.path.join(app_dir, "app_gui.py")
-        exe_name = "python.exe"
-        exe_stem = "python"
+$Internal       = Join-Path $AppDir '_internal'
+$InternalBackup = Join-Path $AppDir '_internal.old'
+$ExeBackup      = "$ExePath.old"
 
-    current_pid = os.getpid()
-    temp_dir = tempfile.gettempdir()
-    ps1_path = os.path.join(temp_dir, "podbase_updater.ps1")
-    log_path = os.path.join(temp_dir, "podbase_updater.log")
-    staging_dir = os.path.join(temp_dir, "podbase_update_staging")
-
-    script_template = r"""
-$ErrorActionPreference = "Continue"
-
-$LogFile = "__LOG_PATH__"
 function Log($msg) {
-    $time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "[$time] $msg" | Out-File -FilePath $LogFile -Append -Encoding utf8
+    $time = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    try { "[$time] $msg" | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
 }
 
-Log "========================================="
-Log "STARTING PODBASE CONTAINER STUDIO UPDATER"
-Log "Target PID: __TARGET_PID__"
-Log "Exe Stem: __EXE_STEM__"
-Log "Exe Path: __EXE_PATH__"
-Log "Exe Args: __EXE_ARGS__"
-Log "App Dir: __APP_DIR__"
-Log "Parent Dir: __PARENT_DIR__"
-Log "Zip Path: __ZIP_PATH__"
-Log "Staging Dir: __STAGING_DIR__"
-Log "Log File: $LogFile"
-Log "========================================="
-
-$TargetPid = __TARGET_PID__
-$ExeStem = "__EXE_STEM__"
-$ExePath = "__EXE_PATH__"
-$ExeArgs = "__EXE_ARGS__"
-$AppDir = "__APP_DIR__"
-$ParentDir = "__PARENT_DIR__"
-$ZipPath = "__ZIP_PATH__"
-$StagingDir = "__STAGING_DIR__"
-
-# 1. Terminate running process by PID and process stem
-if ($TargetPid -and $TargetPid -gt 0) {
-    Log "Stopping target process PID $TargetPid..."
-    Stop-Process -Id $TargetPid -Force -ErrorAction SilentlyContinue
-    Wait-Process -Id $TargetPid -Timeout 6 -ErrorAction SilentlyContinue
+function Write-Result($ok, $message) {
+    try {
+        @{ ok = $ok; version = $NewVersion; old_version = $OldVersion; message = $message; log = $LogFile } |
+            ConvertTo-Json | Out-File -FilePath $ResultFile -Encoding utf8
+    } catch {}
 }
 
-if ($ExeStem -and $ExeStem -ne "python" -and $ExeStem -ne "python3") {
-    Log "Ensuring all remaining instances of $ExeStem are closed..."
-    Get-Process -Name $ExeStem -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+function Run-Robocopy($src, $dst, $extra) {
+    # Vietinis nustatymas: robocopy išvestis į stderr neturi virsti PowerShell išimtimi
+    $ErrorActionPreference = 'Continue'
+    $rargs = @($src, $dst) + $extra + @('/R:10', '/W:1', '/NP', '/NJH', '/NJS', '/NDL')
+    $out = & robocopy.exe @rargs 2>&1
+    $code = $LASTEXITCODE
+    if ($out) { $out | ForEach-Object { Log "  robocopy: $_" } }
+    Log "robocopy $src -> $dst : exit $code"
+    if ($code -ge 8) { throw "Nepavyko nukopijuoti failų (robocopy klaida $code)." }
 }
 
-# 2. Wait until target executable is free and unlocked
-$targetExe = Join-Path $AppDir "$ExeStem.exe"
-if (Test-Path -LiteralPath $targetExe) {
-    for ($i = 0; $i -lt 10; $i++) {
+Log '========================================='
+Log "PODBASE UPDATER: v$OldVersion -> v$NewVersion"
+Log "App dir: $AppDir"
+Log "Staged app: $StagedApp"
+
+$ok = $false
+$message = ''
+$backupMade = $false
+
+try {
+    # 1. Laukiame, kol programa užsidarys
+    Wait-Process -Id $TargetPid -Timeout 20 -ErrorAction SilentlyContinue
+    Get-Process -Id $TargetPid -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Kiti tos pačios programos (to paties exe) egzemplioriai
+    Get-Process -Name $ExeStem -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $ExePath } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+
+    # 2. Laukiame, kol exe bus atrakintas
+    $unlocked = $false
+    for ($i = 0; $i -lt 30; $i++) {
         try {
-            $stream = [System.IO.File]::Open($targetExe, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-            if ($stream) {
-                $stream.Close()
-                $stream.Dispose()
-                Log "Target executable is writable."
-                break
-            }
+            $s = [System.IO.File]::Open($ExePath, 'Open', 'ReadWrite', 'None')
+            $s.Close()
+            $unlocked = $true
+            break
         } catch {
-            Log "Target executable is still locked, waiting 1s... ($i/10)"
             Start-Sleep -Seconds 1
         }
     }
-}
+    if (-not $unlocked) { throw 'Programos failas vis dar naudojamas (užrakintas).' }
+    Log 'Executable unlocked.'
 
-# 3. Clean and prepare staging directory
-Log "Preparing staging directory: $StagingDir"
-if (Test-Path -LiteralPath $StagingDir) {
+    # 3. Atsarginė kopija: _internal pervadiname, exe nukopijuojame
+    if (Test-Path -LiteralPath $InternalBackup) { Remove-Item -LiteralPath $InternalBackup -Recurse -Force }
+    if (Test-Path -LiteralPath $ExeBackup) { Remove-Item -LiteralPath $ExeBackup -Force }
+    if (Test-Path -LiteralPath $Internal) {
+        Rename-Item -LiteralPath $Internal -NewName '_internal.old'
+    }
+    Copy-Item -LiteralPath $ExePath -Destination $ExeBackup -Force
+    $backupMade = $true
+    Log 'Backup created.'
+
+    # 4. Naujas _internal (švari kopija, be senų failų)
+    Run-Robocopy (Join-Path $StagedApp '_internal') $Internal @('/E')
+
+    # 5. Šakniniai failai (exe ir kt.). Vietinių nustatymų failų neliečiame.
+    Run-Robocopy $StagedApp $AppDir @('/E', '/IS', '/IT', '/XD', '_internal', '_internal.old',
+        '/XF', 'models.json', 'jigs.json', 'config.json', 'history.json')
+
+    # 6. Pagalbiniai failai šalia programos aplanko (klaidos čia nekritinės)
+    try {
+        $stagedExt = Join-Path $StagingDir 'Chrome_Extension'
+        if (Test-Path -LiteralPath $stagedExt) {
+            Run-Robocopy $stagedExt (Join-Path $ParentDir 'Chrome_Extension') @('/E', '/IS', '/IT')
+        }
+        foreach ($name in @('Paleisti_Programa.bat', 'NAUDOJIMO_INSTRUKCIJA.md')) {
+            $p = Join-Path $StagingDir $name
+            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $ParentDir -Force }
+        }
+    } catch {
+        Log "WARNING (companion files): $($_.Exception.Message)"
+    }
+
+    $ok = $true
+    $message = "Programa atnaujinta į v$NewVersion."
+    Log 'Files deployed successfully.'
+}
+catch {
+    $message = $_.Exception.Message
+    Log "ERROR: $message"
+
+    # Atstatome senąją versiją
+    if ($backupMade) {
+        try {
+            Log 'Rolling back to previous version...'
+            if (Test-Path -LiteralPath $InternalBackup) {
+                if (Test-Path -LiteralPath $Internal) { Remove-Item -LiteralPath $Internal -Recurse -Force }
+                Rename-Item -LiteralPath $InternalBackup -NewName '_internal'
+            }
+            if (Test-Path -LiteralPath $ExeBackup) {
+                Copy-Item -LiteralPath $ExeBackup -Destination $ExePath -Force
+                Remove-Item -LiteralPath $ExeBackup -Force -ErrorAction SilentlyContinue
+            }
+            Log 'Rollback completed.'
+        } catch {
+            Log "ROLLBACK ERROR: $($_.Exception.Message)"
+            $message = "$message Senosios versijos atstatyti nepavyko."
+        }
+    }
+}
+finally {
+    $ErrorActionPreference = 'Continue'
+    Write-Result $ok $message
+
+    if ($ok) {
+        Remove-Item -LiteralPath $InternalBackup -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $ExeBackup -Force -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
 
-# 4. Extract update archive
-Log "Extracting ZIP archive: $ZipPath"
-try {
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $StagingDir -Force
-    Log "Extraction completed successfully."
-} catch {
-    Log "Extraction failed: $($_.Exception.Message)"
-    exit 1
-}
-
-# 5. Detect payload folder structure
-$stagedApp = $null
-if (Test-Path -LiteralPath (Join-Path $StagingDir "Podbase_Konteineriai")) {
-    $stagedApp = Join-Path $StagingDir "Podbase_Konteineriai"
-} elseif (Test-Path -LiteralPath (Join-Path $StagingDir "$ExeStem.exe")) {
-    $stagedApp = $StagingDir
-} else {
-    $subDirs = Get-ChildItem -Path $StagingDir -Directory
-    if ($subDirs.Count -eq 1 -and (Test-Path (Join-Path $subDirs[0].FullName "Podbase_Konteineriai"))) {
-        $stagedApp = Join-Path $subDirs[0].FullName "Podbase_Konteineriai"
-    } elseif ($subDirs.Count -eq 1) {
-        $stagedApp = $subDirs[0].FullName
+    # 7. Programą paleidžiame VISADA (naują arba atstatytą seną)
+    try {
+        Start-Process -FilePath $ExePath -WorkingDirectory $AppDir
+        Log 'Application restarted.'
+    } catch {
+        Log "RESTART ERROR: $($_.Exception.Message)"
     }
+    Log "=== UPDATER FINISHED (ok=$ok) ==="
 }
-
-if (-not $stagedApp -or -not (Test-Path -LiteralPath $stagedApp)) {
-    Log "ERROR: Could not find valid application payload in staging directory!"
-    exit 1
-}
-
-Log "Deploying payload from $stagedApp to $AppDir using Robocopy..."
-
-# Backup user configs (config.json, history.json) before overwriting
-$cfgBackup = Join-Path $env:TEMP "podbase_config_backup.json"
-$histBackup = Join-Path $env:TEMP "podbase_history_backup.json"
-if (Test-Path (Join-Path $AppDir "config.json")) {
-    Copy-Item (Join-Path $AppDir "config.json") $cfgBackup -Force -ErrorAction SilentlyContinue
-    Log "Backed up config.json"
-}
-if (Test-Path (Join-Path $AppDir "history.json")) {
-    Copy-Item (Join-Path $AppDir "history.json") $histBackup -Force -ErrorAction SilentlyContinue
-    Log "Backed up history.json"
-}
-
-# Deploy application files with Robocopy
-# /E = recursive, /IS = include same files, /IT = include tweaked files, /R:5 = retry 5 times, /W:1 = wait 1 sec
-$roboArgs = @($stagedApp, $AppDir, "/E", "/IS", "/IT", "/R:5", "/W:1", "/NP")
-$resRobo = Start-Process -FilePath "robocopy.exe" -ArgumentList $roboArgs -Wait -NoNewWindow -PassThru
-Log "Robocopy exit code: $($resRobo.ExitCode)"
-
-if ($resRobo.ExitCode -ge 8) {
-    Log "ERROR: Robocopy failed with exit code $($resRobo.ExitCode)"
-    exit 1
-}
-
-# Restore user config & history
-if (Test-Path $cfgBackup) {
-    Copy-Item $cfgBackup (Join-Path $AppDir "config.json") -Force -ErrorAction SilentlyContinue
-    Remove-Item $cfgBackup -Force -ErrorAction SilentlyContinue
-    Log "Restored user config.json"
-}
-if (Test-Path $histBackup) {
-    Copy-Item $histBackup (Join-Path $AppDir "history.json") -Force -ErrorAction SilentlyContinue
-    Remove-Item $histBackup -Force -ErrorAction SilentlyContinue
-    Log "Restored user history.json"
-}
-
-# Deploy companion items (Chrome_Extension, Paleisti_Programa.bat, NAUDOJIMO_INSTRUKCIJA.md)
-$stagedExt = Join-Path $StagingDir "Chrome_Extension"
-if (Test-Path -LiteralPath $stagedExt) {
-    $destExt = Join-Path $ParentDir "Chrome_Extension"
-    Log "Deploying Chrome Extension to $destExt..."
-    Start-Process -FilePath "robocopy.exe" -ArgumentList @($stagedExt, $destExt, "/E", "/IS", "/IT", "/R:3", "/W:1", "/NP") -Wait -NoNewWindow -PassThru | Out-Null
-}
-
-$stagedBat = Join-Path $StagingDir "Paleisti_Programa.bat"
-if (Test-Path -LiteralPath $stagedBat) {
-    Log "Deploying Paleisti_Programa.bat to $ParentDir..."
-    Copy-Item -Path $stagedBat -Destination $ParentDir -Force -ErrorAction SilentlyContinue
-}
-
-$stagedDoc = Join-Path $StagingDir "NAUDOJIMO_INSTRUKCIJA.md"
-if (Test-Path -LiteralPath $stagedDoc) {
-    Copy-Item -Path $stagedDoc -Destination $ParentDir -Force -ErrorAction SilentlyContinue
-}
-
-# Clean staging and zip
-Log "Cleaning up staging files..."
-Remove-Item -LiteralPath $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
-
-# 6. Restart application cleanly as a visible desktop process
-Log "Restarting application: $ExePath $ExeArgs in $AppDir..."
-Start-Sleep -Milliseconds 600
-
-try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $ExePath
-    if ($ExeArgs) {
-        $psi.Arguments = "`"$ExeArgs`""
-    }
-    $psi.WorkingDirectory = $AppDir
-    $psi.UseShellExecute = $true
-    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    Log "Application started successfully! Process ID: $($proc.Id)"
-} catch {
-    Log "ProcessStart failed: $($_.Exception.Message). Falling back to cmd start..."
-    if ($ExeArgs) {
-        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "start", "`"`"", "`"$ExePath`"", "`"$ExeArgs`"" -WorkingDirectory $AppDir
-    } else {
-        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "start", "`"`"", "`"$ExePath`"" -WorkingDirectory $AppDir
-    }
-}
-
-Log "=== UPDATE COMPLETED SUCCESSFULLY ==="
 """
 
-    script_content = script_template.replace("__LOG_PATH__", log_path)
-    script_content = script_content.replace("__EXE_PATH__", exe_path)
-    script_content = script_content.replace("__EXE_ARGS__", exe_args)
-    script_content = script_content.replace("__APP_DIR__", app_dir)
-    script_content = script_content.replace("__PARENT_DIR__", parent_dir)
-    script_content = script_content.replace("__ZIP_PATH__", downloaded_file_path)
-    script_content = script_content.replace("__STAGING_DIR__", staging_dir)
-    script_content = script_content.replace("__EXE_STEM__", exe_stem)
-    script_content = script_content.replace("__TARGET_PID__", str(current_pid))
 
-    with open(ps1_path, "w", encoding="utf-8") as f:
-        f.write(script_content)
+def _ps_quote(value):
+    """Paverčia reikšmę į PowerShell eilutę viengubose kabutėse."""
+    return "'" + str(value).replace("'", "''") + "'"
 
-    subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
-        cwd=temp_dir,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        close_fds=True
-    )
+
+def apply_update_and_restart(downloaded_file_path, new_version=""):
+    """
+    Išarchyvuoja atnaujinimą, paleidžia PowerShell skriptą ir užbaigia programą.
+    Sėkmės atveju negrįžta. Klaidos atveju grąžina klaidos tekstą (programa lieka veikti).
+    """
+    if not getattr(sys, "frozen", False):
+        return "Automatinis atnaujinimas veikia tik sukompiliuotoje (.exe) programoje."
+
+    ok, err = validate_update_zip(downloaded_file_path)
+    if not ok:
+        return err
+
+    exe_path = sys.executable
+    app_dir = os.path.dirname(exe_path)
+    parent_dir = os.path.dirname(app_dir)
+    exe_stem = os.path.splitext(os.path.basename(exe_path))[0]
+
+    # Išarchyvuojame Python'u (patikimiau nei Expand-Archive ir patikriname rezultatą prieš uždarant programą)
+    staging_dir = _temp_path("podbase_update_staging")
+    try:
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        with zipfile.ZipFile(downloaded_file_path) as zf:
+            zf.extractall(staging_dir)
+    except Exception as e:
+        return f"Nepavyko išarchyvuoti atnaujinimo: {e}"
+
+    staged_app = os.path.join(staging_dir, PAYLOAD_DIR_NAME)
+    if not os.path.isfile(os.path.join(staged_app, PAYLOAD_EXE_NAME)) or \
+            not os.path.isdir(os.path.join(staged_app, "_internal")):
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        return "Atnaujinimo archyvo struktūra netinkama (nėra programos failų)."
+
+    # Jei dabartinis exe vadinasi kitaip nei naujame pakete, failai nesutaptų
+    if os.path.basename(exe_path).lower() != PAYLOAD_EXE_NAME.lower():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        return f"Programos failas vadinasi {os.path.basename(exe_path)}, o atnaujinime {PAYLOAD_EXE_NAME}."
+
+    values = {
+        "__LOG_PATH__": UPDATER_LOG_PATH,
+        "__RESULT_PATH__": UPDATE_RESULT_PATH,
+        "__EXE_PATH__": exe_path,
+        "__EXE_STEM__": exe_stem,
+        "__APP_DIR__": app_dir,
+        "__PARENT_DIR__": parent_dir,
+        "__STAGING_DIR__": staging_dir,
+        "__STAGED_APP__": staged_app,
+        "__ZIP_PATH__": downloaded_file_path,
+        "__NEW_VERSION__": new_version,
+        "__OLD_VERSION__": CURRENT_VERSION,
+    }
+    script = UPDATER_PS_TEMPLATE
+    for key, val in values.items():
+        script = script.replace(key, _ps_quote(val))
+    script = script.replace("__TARGET_PID__", str(os.getpid()))
+
+    ps1_path = _temp_path("podbase_updater.ps1")
+    try:
+        if os.path.exists(UPDATE_RESULT_PATH):
+            os.remove(UPDATE_RESULT_PATH)
+        with open(ps1_path, "w", encoding="utf-8-sig") as f:
+            f.write(script)
+
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-File", ps1_path],
+            cwd=tempfile.gettempdir(),
+            creationflags=_NO_WINDOW,
+            close_fds=True
+        )
+    except Exception as e:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        return f"Nepavyko paleisti atnaujinimo skripto: {e}"
 
     try:
         QApplication.quit()
     except Exception:
         pass
 
-    # Forcefully terminate process and release all file locks immediately
+    # Užbaigiame procesą iškart, kad atsilaisvintų visi failai
     os._exit(0)
+
+
+def read_last_update_result():
+    """Perskaito ir ištrina paskutinio atnaujinimo rezultatą. Grąžina dict arba None."""
+    if not os.path.exists(UPDATE_RESULT_PATH):
+        return None
+    try:
+        with open(UPDATE_RESULT_PATH, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception:
+        data = None
+    try:
+        os.remove(UPDATE_RESULT_PATH)
+    except Exception:
+        pass
+    return data if isinstance(data, dict) else None
 
 
 # ----------------- PAGRINDINIS ATNAUJINTOJO VALDIKLIS (AppUpdater) -----------------
@@ -737,17 +788,16 @@ class AppUpdater(QObject):
         self.download_worker = None
         self.is_manual_check = False
         self.postpone_until = 0
+        self.postponed_version = None
+        self._busy = False  # rodomas dialogas arba vyksta atsisiuntimas
 
     def check_for_updates(self, repo_slug=DEFAULT_GITHUB_REPO, manual=False):
-        self.is_manual_check = manual
-        now = time.time()
-
-        if not manual and self.postpone_until > now:
+        if self._busy:
             return
-
         if self.check_worker and self.check_worker.isRunning():
             return
 
+        self.is_manual_check = manual
         self.check_worker = VersionCheckWorker(repo_slug=repo_slug, current_ver=self.current_version)
         self.check_worker.update_available.connect(self.on_update_available)
         self.check_worker.no_update.connect(self.on_no_update)
@@ -755,22 +805,36 @@ class AppUpdater(QObject):
         self.check_worker.start()
 
     def on_update_available(self, release_info):
-        self.update_checked.emit(True, f"Rasta nauja versija v{release_info.get('version')}")
+        version = release_info.get("version")
+        self.update_checked.emit(True, f"Rasta nauja versija v{version}")
 
-        dlg = UpdateConfirmDialog(release_info, current_version=self.current_version, parent=self.parent_window)
-        if dlg.exec():
-            download_url = release_info.get("download_url")
-            if download_url:
-                self.start_download(download_url)
-            else:
+        # Automatinio tikrinimo metu netrukdome, jei ši versija buvo atidėta
+        if not self.is_manual_check and self.postponed_version == version and time.time() < self.postpone_until:
+            return
+
+        if not release_info.get("download_url"):
+            if self.is_manual_check:
                 InfoBar.warning(
-                    title="Nėra failo",
-                    content="Šiam atnaujinimui nėra prisegto diegimo failo.",
+                    title="Nėra diegimo failo",
+                    content=f"Versijai v{version} GitHub'e nėra prisegto Podbase_Studio ZIP failo.",
                     position=InfoBarPosition.TOP_RIGHT,
+                    duration=6000,
                     parent=self.parent_window
                 )
+            return
+
+        self._busy = True
+        try:
+            dlg = UpdateConfirmDialog(release_info, current_version=self.current_version, parent=self.parent_window)
+            accepted = dlg.exec()
+        finally:
+            self._busy = False
+
+        if accepted:
+            self.start_download(release_info)
         else:
-            self.postpone_until = time.time() + (4 * 3600)
+            self.postponed_version = version
+            self.postpone_until = time.time() + POSTPONE_SECONDS
             InfoBar.info(
                 title="Atnaujinimas atidėtas",
                 content="Apie naują versiją priminsime vėliau.",
@@ -801,20 +865,26 @@ class AppUpdater(QObject):
                 parent=self.parent_window
             )
 
-    def start_download(self, download_url):
-        self.download_worker = DownloadWorker(download_url)
+    def start_download(self, release_info):
+        version = release_info.get("version", "")
+        self.download_worker = DownloadWorker(
+            release_info.get("download_url"),
+            expected_size=release_info.get("asset_size", 0),
+            expected_sha256=release_info.get("asset_sha256"),
+            target_filename=f"podbase_update_v{version}.zip"
+        )
         prog_dlg = DownloadProgressDialog(self.download_worker, parent=self.parent_window)
 
         def on_download_finished(dest_path):
             prog_dlg.accept()
             InfoBar.success(
                 title="Atsisiųsta!",
-                content="Programa atsinaujina ir persikrauna...",
+                content="Programa atsinaujina ir netrukus persikraus...",
                 position=InfoBarPosition.TOP_RIGHT,
-                duration=2000,
+                duration=3000,
                 parent=self.parent_window
             )
-            QTimer.singleShot(1000, lambda: apply_update_and_restart(dest_path))
+            QTimer.singleShot(1200, lambda: self._apply(dest_path, version))
 
         def on_download_failed(err_msg):
             prog_dlg.reject()
@@ -822,13 +892,51 @@ class AppUpdater(QObject):
                 title="Atsisiuntimo klaida",
                 content=err_msg,
                 position=InfoBarPosition.TOP_RIGHT,
-                duration=5000,
+                duration=8000,
                 parent=self.parent_window
             )
 
         self.download_worker.finished.connect(on_download_finished)
         self.download_worker.failed.connect(on_download_failed)
-
         prog_dlg.cancelButton.clicked.connect(self.download_worker.cancel)
-        self.download_worker.start()
-        prog_dlg.exec()
+
+        self._busy = True
+        try:
+            self.download_worker.start()
+            prog_dlg.exec()
+        finally:
+            self._busy = False
+
+    def _apply(self, dest_path, version):
+        err = apply_update_and_restart(dest_path, new_version=version)
+        if err:
+            InfoBar.error(
+                title="Atnaujinti nepavyko",
+                content=err,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=10000,
+                parent=self.parent_window
+            )
+
+    def show_last_update_result(self):
+        """Parodo, kaip baigėsi paskutinis atnaujinimas (kviečiama paleidus programą)."""
+        result = read_last_update_result()
+        if not result:
+            return
+        if result.get("ok"):
+            InfoBar.success(
+                title="Programa atnaujinta",
+                content=f"Dabar naudojate v{self.current_version}.",
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=6000,
+                parent=self.parent_window
+            )
+        else:
+            InfoBar.error(
+                title="Atnaujinti nepavyko",
+                content=f"{result.get('message', '')} Palikta v{self.current_version}. "
+                        f"Žurnalas: {result.get('log', UPDATER_LOG_PATH)}",
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=-1,
+                parent=self.parent_window
+            )
