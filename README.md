@@ -22,6 +22,7 @@
   - Integruotas vietinis `Flask` API serveris (`localhost:5000`), kuris akimirksniu priima užsakymo dizainus iš valdymo sistemos vienu paspaudimu.
 - **🔍 Pažangus Spaudos Failų Paieškos Variklis:**
   - Rekursyviai skenuoja tinklo (`\\192.168.1.143\...`) ir vietinius aplankus pagal PID numerius ir failų pavadinimus.
+  - Papildomai galima nurodyti brokų (rejected) aplanką: *Nustatymai → 📂 Paieškos Aplankai*.
   - Automatinis nerastų failų aptikimas su **mirksinčiu raudonu indikatoriumi** ekrane.
 - **⏳ Saugus 10 Minučių Laikinas Aplankas (Auto-Cleanup):**
   - Sukuria paruoštus spaudos konteinerius darbalaukyje su automatiniu pasenusių aplankų išvalymu.

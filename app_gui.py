@@ -109,7 +109,8 @@ def load_app_config():
         "theme": "LIGHT",
         "auto_cleanup_minutes": 10,
         "github_repo": DEFAULT_GITHUB_REPO,
-        "auto_check_updates": True
+        "auto_check_updates": True,
+        "reject_folder": ""
     }
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -254,6 +255,23 @@ def is_file_ready(file_path, wait_interval=0.25, max_attempts=4):
     except Exception as e:
         print(f"[is_file_ready klaida]: {e}")
         return False
+
+def build_search_roots(source_dir):
+    """
+    Aplankai, kuriuose ieškoma spaudos failų:
+    1) modelio šaltinio aplankas, 2) bendras tinklo HotFolder, 3) brokų (rejected) aplankas iš nustatymų.
+    """
+    source_dir = (source_dir or "").strip()
+    reject_dir = (load_app_config().get("reject_folder") or "").strip()
+
+    search_roots = []
+    for d in (source_dir, NETWORK_HOTFOLDER_DEFAULT, reject_dir):
+        if d and d not in search_roots and os.path.exists(d):
+            search_roots.append(d)
+
+    if not search_roots and source_dir:
+        search_roots.append(source_dir)
+    return search_roots
 
 def scan_print_files_recursive(search_roots):
     if isinstance(search_roots, str):
@@ -1565,14 +1583,7 @@ class ContainerStudioInterface(QWidget):
         dest_dir = m_data.get("destination", "").strip()
         output_mode = m_data.get("output_mode", "temp_folder")
 
-        search_roots = []
-        if source_dir and os.path.exists(source_dir):
-            search_roots.append(source_dir)
-        if NETWORK_HOTFOLDER_DEFAULT not in search_roots and os.path.exists(NETWORK_HOTFOLDER_DEFAULT):
-            search_roots.append(NETWORK_HOTFOLDER_DEFAULT)
-
-        if not search_roots and source_dir:
-            search_roots.append(source_dir)
+        search_roots = build_search_roots(source_dir)
 
         scanned_files = scan_print_files_recursive(search_roots)
 
@@ -1930,11 +1941,7 @@ class HistoryInterface(QWidget):
         bed_names = it.get("bed_names", [])
         output_mode = it.get("output_mode", "temp_folder")
 
-        search_roots = []
-        if source_dir and os.path.exists(source_dir):
-            search_roots.append(source_dir)
-        if NETWORK_HOTFOLDER_DEFAULT not in search_roots and os.path.exists(NETWORK_HOTFOLDER_DEFAULT):
-            search_roots.append(NETWORK_HOTFOLDER_DEFAULT)
+        search_roots = build_search_roots(source_dir)
 
         scanned_files = scan_print_files_recursive(search_roots)
         total_copied = 0
@@ -2123,9 +2130,14 @@ class ModelsSettingsInterface(QWidget):
         self.init_updates_tab(self.updates_tab)
         self.stack.addWidget(self.updates_tab)
 
+        self.search_tab = QWidget()
+        self.init_search_tab(self.search_tab)
+        self.stack.addWidget(self.search_tab)
+
         self.segmented_nav.addItem("modelsTab", "📱 Modelių ir Žaliavų Nustatymai", lambda: self.stack.setCurrentIndex(0))
         self.segmented_nav.addItem("jigsTab", "📐 Rėmų (Jigs / Stalo) Valdymas", lambda: self.stack.setCurrentIndex(1))
         self.segmented_nav.addItem("updatesTab", "🚀 Atnaujinimai ir Versija", lambda: self.stack.setCurrentIndex(2))
+        self.segmented_nav.addItem("searchTab", "📂 Paieškos Aplankai", lambda: self.stack.setCurrentIndex(3))
         self.segmented_nav.setCurrentItem("modelsTab")
 
         main_layout.addWidget(self.segmented_nav)
@@ -2386,6 +2398,70 @@ class ModelsSettingsInterface(QWidget):
         layout.addWidget(repo_card)
         layout.addStretch(1)
 
+    def init_search_tab(self, parent_widget):
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(10, 14, 10, 10)
+        layout.setSpacing(14)
+
+        card = CardWidget(parent_widget)
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(18, 16, 18, 16)
+        c_layout.setSpacing(12)
+
+        c_layout.addWidget(SubtitleLabel("Brokų (Rejected) Aplankas", card))
+        hint = BodyLabel(
+            "Papildomas aplankas, kuriame taip pat ieškoma spaudos failų pagal PID (visiems modeliams). "
+            "Paieška vyksta ir jo poaplankiuose. Jei tas pats PID randamas keliuose aplankuose, "
+            "imamas naujausias failas.", card)
+        hint.setWordWrap(True)
+        c_layout.addWidget(hint)
+
+        cfg = load_app_config()
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.edit_reject_folder = LineEdit(card)
+        self.edit_reject_folder.setText(cfg.get("reject_folder", ""))
+        self.edit_reject_folder.setPlaceholderText(r"pvz. \\192.168.1.143\podbase-hotfolder\REJECTED")
+        self.edit_reject_folder.setClearButtonEnabled(True)
+        row.addWidget(self.edit_reject_folder, 1)
+
+        btn_browse = PushButton(FIF.FOLDER, "Pasirinkti...", card)
+        btn_browse.clicked.connect(self.browse_reject_folder)
+        row.addWidget(btn_browse)
+        c_layout.addLayout(row)
+
+        self.lbl_reject_status = CaptionLabel("", card)
+        c_layout.addWidget(self.lbl_reject_status)
+        self.edit_reject_folder.textChanged.connect(self.update_reject_status)
+        self.update_reject_status()
+
+        info = CaptionLabel(
+            "Visada ieškoma: modelio šaltinio aplanke ir bendrame tinklo aplanke "
+            f"{NETWORK_HOTFOLDER_DEFAULT}. Nepamirškite paspausti „Išsaugoti“.", card)
+        info.setWordWrap(True)
+        c_layout.addWidget(info)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+    def browse_reject_folder(self):
+        curr = self.edit_reject_folder.text().strip() or NETWORK_HOTFOLDER_DEFAULT
+        folder = QFileDialog.getExistingDirectory(self, "Pasirinkite brokų (rejected) aplanką", curr)
+        if folder:
+            self.edit_reject_folder.setText(os.path.normpath(folder))
+
+    def update_reject_status(self):
+        path = self.edit_reject_folder.text().strip()
+        if not path:
+            self.lbl_reject_status.setText("Brokų aplankas nenustatytas.")
+            self.lbl_reject_status.setStyleSheet("color: #64748b;")
+        elif os.path.exists(path):
+            self.lbl_reject_status.setText("🟢 Aplankas pasiekiamas.")
+            self.lbl_reject_status.setStyleSheet("color: #10b981;")
+        else:
+            self.lbl_reject_status.setText("🔴 Aplankas nerastas arba nepasiekiamas.")
+            self.lbl_reject_status.setStyleSheet("color: #ef4444;")
+
     def on_manual_check_updates(self):
         if self.updater:
             repo_slug = self.edit_github_repo.text().strip() or DEFAULT_GITHUB_REPO
@@ -2597,6 +2673,7 @@ class ModelsSettingsInterface(QWidget):
             cfg = load_app_config()
             cfg["github_repo"] = self.edit_github_repo.text().strip() or DEFAULT_GITHUB_REPO
             cfg["auto_check_updates"] = self.chk_auto_updates.isChecked()
+            cfg["reject_folder"] = self.edit_reject_folder.text().strip()
             save_app_config(cfg)
 
             saved_model_idx = self.current_model_idx

@@ -169,6 +169,10 @@ Kortelėje **„⚙️ Nustatymai ir Tema“**:
 - **Paskirtis (HotFolderis arba Aplankas):** Kelias į ColorGATE HotDir arba specifinį aplanką.
 - **Alijasai / Raktažodžiai:** Raktažodžiai, pagal kuriuos naršyklės plėtinys automatiškai atpažįsta šį modelį.
 
+### 📂 Paieškos Aplankai:
+- **Brokų (Rejected) aplankas:** papildomas aplankas, kuriame taip pat ieškoma spaudos failų pagal PID visiems modeliams (kartu su poaplankiais). Pasirinkite jį mygtuku **„Pasirinkti...“** ir paspauskite **„💾 Išsaugoti nustatymus“**. Žalias užrašas reiškia, kad aplankas pasiekiamas.
+- Jei tas pats PID randamas keliuose aplankuose, imamas naujausias failas.
+
 ### 📐 Rėmų (Jigs) Valdymas:
 - Galite susikurti naujus rėmus, nurodydami eilučių (*Rows*) ir stulpelių (*Cols*) skaičių.
 
