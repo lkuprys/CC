@@ -45,6 +45,7 @@ from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_C
 
 from podbase_core import (
     BASE_DIR, DESKTOP_DIR, ICON_FILE, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
+    get_cleanup_expiry_seconds,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
@@ -336,8 +337,20 @@ class UVSlotWidget(ElevatedCardWidget):
                 }}
             """)
 
+    def set_file_info(self, path=None, mtime=0, ambiguous=False):
+        """Užvedus pelę parodo, kuris spaudos failas buvo paimtas paskutinio generavimo metu."""
+        if not path:
+            self.setToolTip("")
+            return
+        when = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else "?"
+        tip = f"Failas: {os.path.basename(path)}\nAplankas: {os.path.dirname(path)}\nData: {when}"
+        if ambiguous:
+            tip = "⚠️ Rasti keli tinkami failai – paimtas naujausias.\n" + tip
+        self.setToolTip(tip)
+
     def set_data(self, name, url="", item_idx=None):
         self.stop_blinking()
+        self.setToolTip("")
         if self.current_reply:
             try:
                 self.current_reply.abort()
@@ -386,6 +399,7 @@ class UVSlotWidget(ElevatedCardWidget):
 
     def set_empty(self, placeholder_num=None):
         self.stop_blinking()
+        self.setToolTip("")
         if self.current_reply:
             try:
                 self.current_reply.abort()
@@ -523,6 +537,8 @@ class ContainerStudioInterface(QWidget):
         self.bed_names = [""]
         self.current_bed_index = 0
         self.missing_items_by_bed = {}
+        self.found_items_by_bed = {}      # {stalas: {vieta: (kelias, mtime)}}
+        self.ambiguous_items_by_bed = {}  # {stalas: {vieta, ...}}
         self._job_worker = None
         self._job_context = None
 
@@ -876,6 +892,12 @@ class ContainerStudioInterface(QWidget):
                     row_slots.append(slot)
                 self.grid_slots.append(row_slots)
 
+    def _clear_job_marks(self):
+        """Stalo turinys pasikeitė – ankstesnio generavimo žymos nebegalioja."""
+        self.missing_items_by_bed.clear()
+        self.found_items_by_bed.clear()
+        self.ambiguous_items_by_bed.clear()
+
     def render_current_bed(self):
         if not self.active_jig:
             return
@@ -900,6 +922,8 @@ class ContainerStudioInterface(QWidget):
         current_items = [it for it in self.beds[self.current_bed_index] if it and it.get("name")]
         num_items = len(current_items)
         missing_indices = self.missing_items_by_bed.get(self.current_bed_index, set())
+        found_info = self.found_items_by_bed.get(self.current_bed_index, {})
+        ambiguous_indices = self.ambiguous_items_by_bed.get(self.current_bed_index, set())
 
         # 1. Reset all slots to completely empty
         for r in range(rows):
@@ -926,6 +950,8 @@ class ContainerStudioInterface(QWidget):
                     slot_w.start_blinking()
                 else:
                     slot_w.stop_blinking()
+                if i in found_info:
+                    slot_w.set_file_info(*found_info[i], ambiguous=i in ambiguous_indices)
 
         self.update_bed_navigation()
 
@@ -983,7 +1009,7 @@ class ContainerStudioInterface(QWidget):
         )
 
     def on_slot_cleared(self, item_idx):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         if 0 <= self.current_bed_index < len(self.beds):
             curr_items = self.beds[self.current_bed_index]
             if 0 <= item_idx < len(curr_items):
@@ -991,7 +1017,7 @@ class ContainerStudioInterface(QWidget):
                 self.render_current_bed()
 
     def on_slots_swapped(self, src_idx, target_idx):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         if 0 <= self.current_bed_index < len(self.beds):
             curr_items = self.beds[self.current_bed_index]
             if 0 <= src_idx < len(curr_items):
@@ -1003,7 +1029,7 @@ class ContainerStudioInterface(QWidget):
                 self.render_current_bed()
 
     def on_slot_duplicated(self, item_idx):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         if 0 <= self.current_bed_index < len(self.beds):
             curr_items = self.beds[self.current_bed_index]
             if 0 <= item_idx < len(curr_items):
@@ -1040,7 +1066,7 @@ class ContainerStudioInterface(QWidget):
                     )
 
     def on_external_items_dropped(self, target_idx, items):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         if not items:
             return
 
@@ -1062,7 +1088,7 @@ class ContainerStudioInterface(QWidget):
         if not items:
             return
 
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         self.save_current_bed_state()
         capacity = self.get_active_jig_capacity()
 
@@ -1090,7 +1116,7 @@ class ContainerStudioInterface(QWidget):
         )
 
     def add_manual_design(self):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         capacity = self.get_active_jig_capacity()
         curr_items = self.beds[self.current_bed_index]
 
@@ -1103,17 +1129,17 @@ class ContainerStudioInterface(QWidget):
             self.render_current_bed()
 
     def clear_current_bed(self):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         self.beds[self.current_bed_index] = []
         self.render_current_bed()
 
     def reverse_slots_order(self):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         self.beds[self.current_bed_index].reverse()
         self.render_current_bed()
 
     def set_data_from_extension(self, payload):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         designs = payload.get("designs", [])
         model = payload.get("model", None)
         job_name = payload.get("jobName", None) or ""
@@ -1197,7 +1223,7 @@ class ContainerStudioInterface(QWidget):
             )
 
     def load_from_history_entry(self, entry):
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
         job_name = entry.get("job_name", "")
         model_name = entry.get("model_name", "")
         beds = entry.get("beds", [[]])
@@ -1234,7 +1260,7 @@ class ContainerStudioInterface(QWidget):
             return
 
         self.save_current_bed_state()
-        self.missing_items_by_bed.clear()
+        self._clear_job_marks()
 
         valid_beds = []
         for idx, bed_items in enumerate(self.beds):
@@ -1370,14 +1396,32 @@ class ContainerStudioInterface(QWidget):
         missing = res.get("missing", [])
         errors = res.get("errors", [])
 
-        # Mirksintys lizdai – tik jei stalas nepasikeitė, kol vyko kopijavimas
+        warnings = res.get("warnings", [])
+
+        # Žymos ant lizdų – tik jei stalas nepasikeitė, kol vyko kopijavimas
         current_snapshot = [[(it or {}).get("name") for it in bed] for bed in self.beds]
-        if missing and current_snapshot == ctx.get("beds_snapshot"):
-            self.missing_items_by_bed.clear()
+        if current_snapshot == ctx.get("beds_snapshot"):
+            self._clear_job_marks()
+            for bed_idx, item_idx, _name, path, mtime in res.get("found", []):
+                self.found_items_by_bed.setdefault(bed_idx, {})[item_idx] = (path, mtime)
+            for warn_key in res.get("ambiguous", []):
+                self.ambiguous_items_by_bed.setdefault(warn_key[0], set()).add(warn_key[1])
             for bed_idx, item_idx, _name in missing:
                 self.missing_items_by_bed.setdefault(bed_idx, set()).add(item_idx)
-            self.current_bed_index = min(self.missing_items_by_bed.keys())
+            if self.missing_items_by_bed:
+                self.current_bed_index = min(self.missing_items_by_bed.keys())
         self.render_current_bed()
+
+        if warnings:
+            InfoBar.warning(
+                title="Patikrinkite: rasti keli tinkami failai",
+                content="\n".join(warnings[:5]) + (f"\n... ir dar {len(warnings) - 5}" if len(warnings) > 5 else ""),
+                orient=Qt.Vertical,
+                isClosable=True,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=-1,
+                parent=self
+            )
 
         if not is_hot:
             for fold in res.get("folders", []):
@@ -1406,7 +1450,8 @@ class ContainerStudioInterface(QWidget):
         if is_hot:
             msg = f"Failai ({res.get('copied', 0)} vnt.) sėkmingai nusiųsti tiesiai į HotFolderį!\n📁 {ctx.get('dest_dir', '')}"
         else:
-            msg = f"Konteinerio aplankas sukurtas ({ctx.get('bed_count', 0)} stalai, {res.get('copied', 0)} failų).\n⏳ Po 10 min. laikinas aplankas automatiškai išsivalys!"
+            minutes = round(get_cleanup_expiry_seconds() / 60)
+            msg = f"Konteinerio aplankas sukurtas ({ctx.get('bed_count', 0)} stalai, {res.get('copied', 0)} failų).\n⏳ Po {minutes} min. laikinas aplankas automatiškai išsivalys!"
         InfoBar.success(
             title="Konteineris sukurtas!",
             content=msg,
@@ -1696,6 +1741,18 @@ class HistoryInterface(QWidget):
                         os.startfile(fold)
                 except Exception:
                     pass
+
+        warnings = res.get("warnings", [])
+        if warnings:
+            InfoBar.warning(
+                title="Patikrinkite: rasti keli tinkami failai",
+                content="\n".join(warnings[:5]) + (f"\n... ir dar {len(warnings) - 5}" if len(warnings) > 5 else ""),
+                orient=Qt.Vertical,
+                isClosable=True,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=-1,
+                parent=self
+            )
 
         missing = res.get("missing", [])
         if missing:

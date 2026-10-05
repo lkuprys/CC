@@ -352,6 +352,13 @@ def scan_print_files_recursive(search_roots):
     return scanned_files
 
 def find_matching_file_for_design(design_name, scanned_files):
+    """Geriausiai tinkančio failo kelias arba None."""
+    candidates = find_matching_candidates(design_name, scanned_files)
+    return candidates[0][2] if candidates else None
+
+
+def find_matching_candidates(design_name, scanned_files):
+    """Visi tinkami failai [(balas, mtime, kelias)], geriausias pirmas."""
     d_clean = design_name.lower().strip()
     d_num_match = re.search(r'PID[-_:\s]*(\d+)', design_name, re.IGNORECASE)
     pid_digits = d_num_match.group(1) if d_num_match else "".join(c for c in d_clean if c.isdigit())
@@ -389,11 +396,16 @@ def find_matching_file_for_design(design_name, scanned_files):
             matches_with_score.append((50, mtime, f_path))
             continue
 
-    if matches_with_score:
-        matches_with_score.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        return matches_with_score[0][2]
+    matches_with_score.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return matches_with_score
 
-    return None
+
+def ambiguous_alternatives(candidates):
+    """Kiti failai su tokiu pat geriausiu balu (pvz., tas pats PID ir brokų, ir įprastame aplanke)."""
+    if len(candidates) < 2:
+        return []
+    top = candidates[0][0]
+    return [c[2] for c in candidates[1:] if c[0] == top]
 
 # ----------------- STRICT PID & SEQUENTIAL OUTPUT FILENAME FORMATTER -----------------
 def format_output_filename(num_prefix, design_name, source_filepath, custom_name=None):
@@ -520,6 +532,8 @@ def run_container_job(plan, progress=None):
             log.info(f"  nerasta: stalas {bed_idx + 1}, vieta {item_idx + 1}: {name}")
         for err in res["errors"]:
             log.warning(f"  klaida: {err}")
+        for warn in res["warnings"]:
+            log.warning(f"  dėmesio: {warn}")
         return res
     except Exception:
         log.exception("Konteinerio generavimas nepavyko")
@@ -542,7 +556,9 @@ def _run_container_job(plan, progress=None):
         if progress:
             progress(done, total, text)
 
-    result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": []}
+    # found: [(stalas, vieta, pavadinimas, kelias, mtime)], warnings: tekstai operatoriui
+    result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": [],
+              "found": [], "warnings": [], "ambiguous": []}
 
     report("Tikrinami paieškos aplankai...")
     search_roots = build_search_roots(plan.get("source_dir", ""))
@@ -550,17 +566,31 @@ def _run_container_job(plan, progress=None):
 
     def match_all(scanned):
         return {
-            (b["bed_idx"], i): find_matching_file_for_design(name, scanned)
+            (b["bed_idx"], i): find_matching_candidates(name, scanned)
             for b in plan["beds"] for i, name in enumerate(b["items"])
         }
 
     report("Ieškoma spaudos failų...")
     scanned, from_cache = get_scanned_files(search_roots)
-    matches = match_all(scanned)
-    if from_cache and any(v is None or not os.path.exists(v) for v in matches.values()):
+    candidates_by_slot = match_all(scanned)
+    if from_cache and any(not c or not os.path.exists(c[0][2]) for c in candidates_by_slot.values()):
         report("Atnaujinamas failų sąrašas...")
         scanned, _ = get_scanned_files(search_roots, force=True)
-        matches = match_all(scanned)
+        candidates_by_slot = match_all(scanned)
+    matches = {k: (c[0][2] if c else None) for k, c in candidates_by_slot.items()}
+
+    for b in plan["beds"]:
+        for i, name in enumerate(b["items"]):
+            cands = candidates_by_slot.get((b["bed_idx"], i)) or []
+            others = ambiguous_alternatives(cands)
+            if others:
+                chosen = cands[0][2]
+                result["ambiguous"].append((b["bed_idx"], i))
+                result["warnings"].append(
+                    f"{missing_label(name)} (stalas {b['bed_idx'] + 1}, vieta {i + 1}): rasti {len(others) + 1} "
+                    f"tinkami failai, paimtas naujausias – {os.path.basename(chosen)} "
+                    f"({os.path.dirname(chosen)})"
+                )
 
     is_hot = plan.get("hotfolder", False)
     dest_dir = plan.get("dest_dir", "")
@@ -616,6 +646,11 @@ def _run_container_job(plan, progress=None):
                         dst_path = unique_destination(dst_path)
                     safe_copy_file(found, dst_path)
                     result["copied"] += 1
+                    try:
+                        found_mtime = os.path.getmtime(found)
+                    except OSError:
+                        found_mtime = 0
+                    result["found"].append((b["bed_idx"], i, name, found, found_mtime))
                     continue
                 except Exception as e:
                     result["errors"].append(f"{name}: {e}")
