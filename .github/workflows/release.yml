@@ -57,7 +57,7 @@ jobs:
 
       - name: Patikrinti sintaksę
         shell: pwsh
-        run: python -m py_compile app_gui.py updater.py package_release.py
+        run: python -m py_compile app_gui.py podbase_core.py api_server.py updater.py package_release.py
 
       - name: Kompiliuoti programą
         shell: pwsh

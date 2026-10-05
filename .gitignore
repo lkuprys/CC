@@ -22,3 +22,6 @@ ENV/
 # IDE
 .vscode/
 .idea/
+podbase.log
+podbase.log.*
+scan_index.json
