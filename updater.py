@@ -41,7 +41,7 @@ from qfluentwidgets import (
     InfoBarPosition, isDarkTheme, FluentIcon as FIF
 )
 
-CURRENT_VERSION = "1.1.1"
+CURRENT_VERSION = "1.1.2"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 # Release ZIP pavadinimas, kurį sukuria package_release.py
