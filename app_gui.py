@@ -434,6 +434,24 @@ def safe_copy_file(src, dst):
     os.replace(tmp, dst)
 
 
+def safe_folder_name(name, fallback):
+    """Aplanko pavadinimas be kelio dalių: be \\ / : * ? " < > |, ir ne „.“ / „..“."""
+    clean = re.sub(r'[\\/*?:"<>|]', "", str(name or "")).strip().rstrip(". ")
+    if not clean or set(clean) <= {"."}:
+        return fallback
+    return clean
+
+
+def is_inside_dir(path, base):
+    """True, jei path yra base aplanko viduje (ne pats base ir ne aukščiau jo)."""
+    try:
+        real_path = os.path.normcase(os.path.realpath(path))
+        real_base = os.path.normcase(os.path.realpath(base))
+        return real_path != real_base and os.path.commonpath([real_path, real_base]) == real_base
+    except ValueError:
+        return False
+
+
 def run_container_job(plan, progress=None):
     """
     Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
@@ -476,7 +494,7 @@ def run_container_job(plan, progress=None):
     total = len(matches)
     done = 0
     for b in plan["beds"]:
-        title = b["title"]
+        title = safe_folder_name(b["title"], f"Stalas_{b['bed_idx'] + 1}")
         if is_hot:
             target_dir = dest_dir
         else:
@@ -487,6 +505,9 @@ def run_container_job(plan, progress=None):
                 base_out = DESKTOP_DIR
                 os.makedirs(base_out, exist_ok=True)
             target_dir = os.path.join(base_out, title)
+            if not is_inside_dir(target_dir, base_out):
+                result["errors"].append(f"Netinkamas stalo pavadinimas: {title}")
+                continue
             if os.path.exists(target_dir):
                 shutil.rmtree(target_dir, ignore_errors=True)
             os.makedirs(target_dir, exist_ok=True)
@@ -586,9 +607,10 @@ def save_models_data(models_list):
 class FlaskServerThread(QThread):
     designs_received = Signal(dict)
 
-    def __init__(self, port=5000):
+    def __init__(self, port=5000, host="127.0.0.1"):
         super().__init__()
         self.port = port
+        self.host = host
         self.app = Flask(__name__)
         self.server = None
         self.setup_routes()
@@ -606,12 +628,34 @@ class FlaskServerThread(QThread):
         def get_jigs():
             return jsonify(load_jigs_data())
 
+        @self.app.before_request
+        def check_host():
+            # Apsauga nuo DNS rebinding: priimame tik užklausas, adresuotas šiam kompiuteriui
+            if self.host in ("127.0.0.1", "localhost"):
+                host = (request.host or "").rsplit(":", 1)[0].strip("[]").lower()
+                if host not in ("127.0.0.1", "localhost"):
+                    return jsonify({"success": False, "error": "Forbidden host"}), 403
+
         @self.app.route("/api/add_designs", methods=["POST"])
         def add_designs():
-            data = request.json or {}
-            designs = data.get("designs", [])
-            model = data.get("model", None)
-            job_name = data.get("jobName", None) or data.get("bidNumber", None)
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                return jsonify({"success": False, "error": "Netinkamas JSON"}), 400
+            designs = []
+            for d in data.get("designs") or []:
+                if not isinstance(d, dict):
+                    continue
+                d = dict(d)
+                d["name"] = str(d.get("name") or "").strip()
+                url = str(d.get("url") or "").strip()
+                # Tik http(s): vietiniai ir UNC keliai (\\serveris\...) iš išorės neleidžiami,
+                # kitaip Windows prisijungtų prie svetimo serverio ir atskleistų NTLM duomenis
+                d["url"] = url if url.lower().startswith(("http://", "https://")) else ""
+                designs.append(d)
+            model = data.get("model")
+            model = str(model) if isinstance(model, (str, int)) else None
+            job_name = data.get("jobName") or data.get("bidNumber")
+            job_name = str(job_name) if isinstance(job_name, (str, int)) else None
             
             self.designs_received.emit({
                 "designs": designs,
@@ -622,7 +666,7 @@ class FlaskServerThread(QThread):
 
     def run(self):
         try:
-            self.server = make_server("0.0.0.0", self.port, self.app, threaded=True)
+            self.server = make_server(self.host, self.port, self.app, threaded=True)
             self.server.serve_forever()
         except Exception as e:
             print(f"[Flask server error]: {e}")
@@ -1756,7 +1800,7 @@ class ContainerStudioInterface(QWidget):
                 bed_title = self.bed_names[real_bed_idx]
             else:
                 bed_title = f"Stalas_{bed_num}"
-            clean_bed_title = re.sub(r'[\\/*?:"<>|]', "", bed_title).strip() or f"Stalas_{bed_num}"
+            clean_bed_title = safe_folder_name(bed_title, f"Stalas_{bed_num}")
             beds_plan.append({
                 "bed_idx": real_bed_idx,
                 "title": clean_bed_title,
@@ -2121,7 +2165,7 @@ class HistoryInterface(QWidget):
                 bed_title = bed_names[real_bed_idx]
             else:
                 bed_title = f"{job_title}_{bed_num}" if len(valid_beds) > 1 else job_title
-            clean_bed_title = re.sub(r'[\\/*?:"<>|]', "", bed_title).strip() or f"Stalas_{bed_num}"
+            clean_bed_title = safe_folder_name(bed_title, f"Stalas_{bed_num}")
             beds_plan.append({
                 "bed_idx": real_bed_idx,
                 "title": clean_bed_title,
@@ -2818,7 +2862,7 @@ class ModelsSettingsInterface(QWidget):
         self.select_jig_row(len(self.jigs_list) - 1)
 
     def delete_jig(self):
-        if 0 <= self.current_model_idx < len(self.jigs_list):
+        if 0 <= self.current_jig_idx < len(self.jigs_list):
             del self.jigs_list[self.current_jig_idx]
             self.populate_jigs_table()
             self.update_jig_combos()
@@ -2912,7 +2956,7 @@ class MainWindow(FluentWindow):
 
         self.init_navigation()
 
-        self.server_thread = FlaskServerThread(port=5000)
+        self.server_thread = FlaskServerThread(port=5000, host=(load_app_config().get("api_host") or "127.0.0.1"))
         self.server_thread.designs_received.connect(self.on_designs_received)
         self.server_thread.start()
 
