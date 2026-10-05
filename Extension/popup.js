@@ -22,15 +22,40 @@ document.addEventListener("DOMContentLoaded", () => {
     // Remove trailing slash
     rawUrl = rawUrl.replace(/\/+$/, "");
 
-    chrome.storage.local.set({ serverUrl: rawUrl }, () => {
-      statusMsg.textContent = "Išsaugota sėkmingai!";
-      statusMsg.className = "status success";
-      urlInput.value = rawUrl;
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch (e) {
+      statusMsg.textContent = "Netinkamas adresas.";
+      statusMsg.className = "status error";
+      return;
+    }
 
-      setTimeout(() => {
-        statusMsg.textContent = "";
-        statusMsg.className = "status";
-      }, 1500);
+    const save = () => {
+      chrome.storage.local.set({ serverUrl: rawUrl }, () => {
+        statusMsg.textContent = "Išsaugota sėkmingai!";
+        statusMsg.className = "status success";
+        urlInput.value = rawUrl;
+
+        setTimeout(() => {
+          statusMsg.textContent = "";
+          statusMsg.className = "status";
+        }, 1500);
+      });
+    };
+
+    // Šis kompiuteris leidžiamas visada; kitam adresui plėtinys paprašo leidimo
+    if (["127.0.0.1", "localhost"].includes(parsed.hostname)) {
+      save();
+      return;
+    }
+    chrome.permissions.request({ origins: [`${parsed.protocol}//${parsed.hostname}/*`] }, (granted) => {
+      if (granted) {
+        save();
+      } else {
+        statusMsg.textContent = "Leidimas jungtis prie šio adreso nesuteiktas.";
+        statusMsg.className = "status error";
+      }
     });
   });
 });

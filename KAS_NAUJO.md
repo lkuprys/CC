@@ -3,3 +3,12 @@
 - Saugumas: naršyklės plėtinio API dabar pasiekiamas tik iš šio kompiuterio (127.0.0.1), užklausos su svetimu adresu atmetamos.
 - Saugumas: iš plėtinio priimamos tik http(s) paveikslėlių nuorodos (tinklo / vietiniai keliai ignoruojami).
 - Pataisyta: „Ištrinti rėmą“ kartais ištrindavo ne pasirinktą, o paskutinį rėmą.
+- Failų paieška: PID-1234 nebesutampa su kito užsakymo failu (pvz., 51234_x.png); jei failo su tuo PID nėra, jis rodomas kaip nerastas.
+- HotFolderyje jau esantis (dar neatspausdintas) failas nebeperrašomas – naujas gauna priesagą _2, _3...
+- Vienu metu vykdomas tik vienas generavimas; uždaryti programos generavimo metu nebeleidžiama.
+- Nustatymai, modeliai, rėmai ir istorija rašomi saugiai (nebesugadinami nutrūkus įrašymui); sugadintas failas išsaugomas kopijoje *.sugadintas_*.
+- Automatinis valymas naudoja config.json „auto_cleanup_minutes“ reikšmę.
+- Jei 5000 prievadas užimtas, rodomas klaidos pranešimas, o ženkliukas tampa raudonas.
+- Greitesnės miniatiūros: įsimenamos ir dideli failai dekoduojami sumažinti.
+- Naršyklės plėtinys (v1.1): pataisytas XSS, leidimai susiaurinti iki localhost (kitam adresui paprašoma leidimo), veikia ir mfgpodbase.com subdomenuose, greitesnis puslapio stebėjimas.
+- Paleisti_Programa.bat be BOM (pirma eilutė nebemeta klaidos).

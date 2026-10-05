@@ -20,7 +20,7 @@ if sys.platform == 'win32':
         pass
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
-from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QImage, QDrag, QCursor
+from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QImage, QImageReader, QDrag, QCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFrame, QSizePolicy, QFileDialog, QSpacerItem, QTableWidgetItem,
@@ -102,7 +102,37 @@ ensure_local_data_files()
 
 # Common shared network hotfolder roots
 NETWORK_HOTFOLDER_DEFAULT = r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER"
-AUTO_CLEANUP_EXPIRY_SECONDS = 600  # 10 minutes
+
+# ----------------- SAUGUS JSON RAŠYMAS / SKAITYMAS -----------------
+_json_write_lock = threading.Lock()
+
+
+def write_json_atomic(path, data, **dump_kwargs):
+    """Rašo į laikiną failą ir tik tada pakeičia originalą – nutrūkus rašymui failas nesugadinamas."""
+    tmp = f"{path}.tmp"
+    with _json_write_lock:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, **dump_kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+
+_corrupt_backed_up = set()
+
+
+def backup_corrupt_file(path, err):
+    """Sugadintą JSON failą išsaugo atsarginei kopijai, kad kitas išsaugojimas jo negalutinai neperrašytų."""
+    if path in _corrupt_backed_up or not os.path.exists(path):
+        return
+    _corrupt_backed_up.add(path)
+    try:
+        backup = f"{path}.sugadintas_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        shutil.copy2(path, backup)
+        print(f"[JSON klaida] {path}: {err}. Kopija: {backup}")
+    except Exception as e:
+        print(f"[JSON klaida] {path}: {err}. Kopijos padaryti nepavyko: {e}")
+
 
 # ----------------- CONFIG & THEME STORAGE -----------------
 def load_app_config():
@@ -114,8 +144,7 @@ def load_app_config():
         "reject_folder": ""
     }
     if not os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(default_config, f, indent=2)
+        write_json_atomic(CONFIG_FILE, default_config, indent=2)
         return default_config
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -125,12 +154,12 @@ def load_app_config():
             if "auto_check_updates" not in data:
                 data["auto_check_updates"] = True
             return data
-    except Exception:
+    except Exception as e:
+        backup_corrupt_file(CONFIG_FILE, e)
         return default_config
 
 def save_app_config(cfg):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+    write_json_atomic(CONFIG_FILE, cfg, indent=2)
 
 # ----------------- HISTORY STORAGE -----------------
 def load_history_data():
@@ -139,23 +168,35 @@ def load_history_data():
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        backup_corrupt_file(HISTORY_FILE, e)
         return []
 
 def save_history_data(history_list):
     if len(history_list) > 150:
         history_list = history_list[:150]
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history_list, f, ensure_ascii=False, indent=2)
+    write_json_atomic(HISTORY_FILE, history_list, ensure_ascii=False, indent=2)
+
+_history_lock = threading.Lock()
 
 def add_history_entry(entry):
-    h = load_history_data()
-    h.insert(0, entry)
-    save_history_data(h)
+    with _history_lock:
+        h = load_history_data()
+        h.insert(0, entry)
+        save_history_data(h)
 
 # ----------------- TEMPORARY FOLDER 10-MIN AUTO-CLEANUP -----------------
+def get_cleanup_expiry_seconds():
+    try:
+        minutes = float(load_app_config().get("auto_cleanup_minutes", 10))
+    except (TypeError, ValueError):
+        minutes = 10
+    return max(1.0, minutes) * 60
+
+
 def perform_temp_folders_cleanup(tracked_dirs=None):
     now = time.time()
+    expiry = get_cleanup_expiry_seconds()
     dirs_to_check = [DESKTOP_DIR]
     if tracked_dirs:
         for d in tracked_dirs:
@@ -172,13 +213,37 @@ def perform_temp_folders_cleanup(tracked_dirs=None):
                     try:
                         mtime = os.path.getmtime(item_path)
                         age = now - mtime
-                        if age >= AUTO_CLEANUP_EXPIRY_SECONDS:
+                        if age >= expiry:
                             shutil.rmtree(item_path, ignore_errors=True)
-                            print(f"[AutoCleanup] Ištrintas pasenęs laikinas aplankas (>10 min): {item_path}")
+                            print(f"[AutoCleanup] Ištrintas pasenęs laikinas aplankas (>{expiry / 60:.0f} min): {item_path}")
                     except Exception as err:
                         print(f"[AutoCleanup klaida]: {err}")
         except Exception as e:
             print(f"[AutoCleanup listing error]: {e}")
+
+# ----------------- MINIATIŪRŲ ATMINTIS -----------------
+# Perpiešiant stalą (sukeitimas, dubliavimas) miniatiūros nebeįkeliamos iš naujo.
+_THUMB_CACHE_MAX = 300
+_thumb_cache = {}
+
+
+def _thumb_key(url, dim):
+    try:
+        mtime = os.path.getmtime(url) if os.path.exists(url) else 0
+    except OSError:
+        mtime = 0
+    return (url, mtime, dim)
+
+
+def _thumb_cache_get(url, dim):
+    return _thumb_cache.get(_thumb_key(url, dim))
+
+
+def _thumb_cache_put(url, dim, pix):
+    if len(_thumb_cache) >= _THUMB_CACHE_MAX:
+        _thumb_cache.pop(next(iter(_thumb_cache)))
+    _thumb_cache[_thumb_key(url, dim)] = pix
+
 
 # ----------------- DRAG & DROP MIME PARSER -----------------
 def parse_dropped_items(mime_data):
@@ -354,7 +419,8 @@ def find_matching_file_for_design(design_name, scanned_files):
                 matches_with_score.append((90, mtime, f_path))
                 continue
 
-            if pid_digits in stem_l:
+            # Pvz. „pid1234“ tinka, bet „51234“ ar „12345“ – ne (kitas užsakymas)
+            if re.search(r'(?<!\d)' + re.escape(pid_digits) + r'(?!\d)', stem_l):
                 matches_with_score.append((70, mtime, f_path))
                 continue
 
@@ -362,7 +428,11 @@ def find_matching_file_for_design(design_name, scanned_files):
             matches_with_score.append((85, mtime, f_path))
             continue
 
-        if len(d_clean) >= 3 and (d_clean in stem_l or stem_l in d_clean):
+        # Kai nurodytas aiškus PID, failas be to PID negali būti laikomas atitikmeniu
+        if d_num_match:
+            continue
+
+        if len(d_clean) >= 3 and len(stem_l) >= 3 and (d_clean in stem_l or stem_l in d_clean):
             matches_with_score.append((50, mtime, f_path))
             continue
 
@@ -396,7 +466,7 @@ def format_output_filename(num_prefix, design_name, source_filepath, custom_name
             if num_lead:
                 base_name = f"PID-{num_lead.group(1)}"
             else:
-                base_name = design_name.strip()
+                base_name = safe_folder_name(design_name, stem_file or "Dizainas")
 
     return f"{num_prefix}_{base_name}{ext}"
 
@@ -420,6 +490,17 @@ def get_scanned_files(search_roots, force=False):
     with _scan_cache_lock:
         _scan_cache[key] = (time.time(), files)
     return files, False
+
+
+def unique_destination(dst):
+    """Jei failas jau yra (pvz., HotFolderis jo dar nepaėmė), grąžina pavadinimą su _2, _3..."""
+    if not os.path.exists(dst):
+        return dst
+    stem, ext = os.path.splitext(dst)
+    n = 2
+    while os.path.exists(f"{stem}_{n}{ext}"):
+        n += 1
+    return f"{stem}_{n}{ext}"
 
 
 def safe_copy_file(src, dst):
@@ -452,7 +533,22 @@ def is_inside_dir(path, base):
         return False
 
 
+_container_job_lock = threading.Lock()
+
+
 def run_container_job(plan, progress=None):
+    """Vienu metu vykdomas tik vienas darbas (Studija ir Istorija rašo į tuos pačius aplankus)."""
+    if not _container_job_lock.acquire(blocking=False):
+        if progress:
+            progress(0, 0, "Laukiama, kol baigsis kitas generavimas...")
+        _container_job_lock.acquire()
+    try:
+        return _run_container_job(plan, progress)
+    finally:
+        _container_job_lock.release()
+
+
+def _run_container_job(plan, progress=None):
     """
     Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
 
@@ -524,7 +620,10 @@ def run_container_job(plan, progress=None):
             if found:
                 try:
                     dst_name = format_output_filename(num_prefix, name, found, custom_name=custom_name)
-                    safe_copy_file(found, os.path.join(target_dir, dst_name))
+                    dst_path = os.path.join(target_dir, dst_name)
+                    if is_hot:
+                        dst_path = unique_destination(dst_path)
+                    safe_copy_file(found, dst_path)
                     result["copied"] += 1
                     continue
                 except Exception as e:
@@ -579,33 +678,35 @@ def load_jigs_data():
             {"id": "jig_3x6", "name": "Rėmas 3x6 (18 vnt. - Dėklai)", "rows": 3, "cols": 6, "total_slots": 18},
             {"id": "jig_2x4", "name": "Rėmas 2x4 (8 vnt.)", "rows": 2, "cols": 4, "total_slots": 8}
         ]
-        with open(JIGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(default_jigs, f, ensure_ascii=False, indent=2)
+        write_json_atomic(JIGS_FILE, default_jigs, ensure_ascii=False, indent=2)
         return default_jigs
     try:
         with open(JIGS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        backup_corrupt_file(JIGS_FILE, e)
         return []
 
 def save_jigs_data(jigs_list):
-    with open(JIGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(jigs_list, f, ensure_ascii=False, indent=2)
+    write_json_atomic(JIGS_FILE, jigs_list, ensure_ascii=False, indent=2)
 
 def load_models_data():
     try:
         with open(MODELS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        backup_corrupt_file(MODELS_FILE, e)
         return []
 
 def save_models_data(models_list):
-    with open(MODELS_FILE, "w", encoding="utf-8") as f:
-        json.dump(models_list, f, ensure_ascii=False, indent=2)
+    write_json_atomic(MODELS_FILE, models_list, ensure_ascii=False, indent=2)
 
 # ----------------- FLASK API SERVER (QThread) -----------------
 class FlaskServerThread(QThread):
     designs_received = Signal(dict)
+    server_failed = Signal(str)
 
     def __init__(self, port=5000, host="127.0.0.1"):
         super().__init__()
@@ -670,6 +771,7 @@ class FlaskServerThread(QThread):
             self.server.serve_forever()
         except Exception as e:
             print(f"[Flask server error]: {e}")
+            self.server_failed.emit(str(e))
 
     def stop(self):
         if self.server:
@@ -891,10 +993,23 @@ class UVSlotWidget(ElevatedCardWidget):
         self.thumb_label.setPixmap(QPixmap())
 
         if self.design_url:
-            if os.path.exists(self.design_url):
-                pix = QPixmap(self.design_url).scaled(thumb_dim, thumb_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.thumb_label.setPixmap(pix)
+            cached = _thumb_cache_get(self.design_url, thumb_dim)
+            if cached is not None:
+                self.thumb_label.setPixmap(cached)
                 self.thumb_label.setText("")
+            elif os.path.exists(self.design_url):
+                reader = QImageReader(self.design_url)
+                reader.setAutoTransform(True)
+                size = reader.size()
+                if size.isValid() and (size.width() > thumb_dim * 2 or size.height() > thumb_dim * 2):
+                    # Dideli spaudos failai dekoduojami iškart sumažinti – greičiau ir mažiau atminties
+                    reader.setScaledSize(size.scaled(thumb_dim * 2, thumb_dim * 2, Qt.KeepAspectRatio))
+                img = reader.read()
+                if not img.isNull():
+                    pix = QPixmap.fromImage(img).scaled(thumb_dim, thumb_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    _thumb_cache_put(self.design_url, thumb_dim, pix)
+                    self.thumb_label.setPixmap(pix)
+                    self.thumb_label.setText("")
             else:
                 self.load_thumbnail(self.design_url)
         else:
@@ -958,6 +1073,7 @@ class UVSlotWidget(ElevatedCardWidget):
             if img.loadFromData(data):
                 thumb_dim = 95 if self.is_single_row else 75
                 pix = QPixmap.fromImage(img).scaled(thumb_dim, thumb_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                _thumb_cache_put(target_url, thumb_dim, pix)
                 self.thumb_label.setPixmap(pix)
                 self.thumb_label.setText("")
         
@@ -2641,7 +2757,12 @@ class ModelsSettingsInterface(QWidget):
 
         self.lbl_reject_status = CaptionLabel("", card)
         c_layout.addWidget(self.lbl_reject_status)
-        self.edit_reject_folder.textChanged.connect(self.update_reject_status)
+        # Tinklo kelio tikrinimas gali užtrukti, todėl tikriname tik nustojus rašyti
+        self._reject_check_timer = QTimer(self)
+        self._reject_check_timer.setSingleShot(True)
+        self._reject_check_timer.setInterval(600)
+        self._reject_check_timer.timeout.connect(self.update_reject_status)
+        self.edit_reject_folder.textChanged.connect(self._reject_check_timer.start)
         self.update_reject_status()
 
         info = CaptionLabel(
@@ -2958,6 +3079,7 @@ class MainWindow(FluentWindow):
 
         self.server_thread = FlaskServerThread(port=5000, host=(load_app_config().get("api_host") or "127.0.0.1"))
         self.server_thread.designs_received.connect(self.on_designs_received)
+        self.server_thread.server_failed.connect(self.on_server_failed)
         self.server_thread.start()
 
         # Periodic 10-minute Auto-Cleanup timer (checks every 30s)
@@ -3025,6 +3147,17 @@ class MainWindow(FluentWindow):
         self.studio_interface.populate_models_combo()
         self.studio_interface.on_model_changed()
 
+    def on_server_failed(self, err):
+        self.studio_interface.status_pill.setText("🔴 Port 5000")
+        InfoBar.error(
+            title="Naršyklės plėtinio ryšys neveikia",
+            content=f"Nepavyko paleisti serverio 5000 prievade ({err}). "
+                    "Galbūt programa jau atidaryta kitame lange.",
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,
+            parent=self
+        )
+
     def on_designs_received(self, payload):
         self.studio_interface.set_data_from_extension(payload)
         self.switchTo(self.studio_interface)
@@ -3033,6 +3166,19 @@ class MainWindow(FluentWindow):
         self.activateWindow()
 
     def closeEvent(self, event):
+        running = [w for w in (getattr(self.studio_interface, "_job_worker", None),
+                               getattr(self.history_interface, "_job_worker", None))
+                   if w is not None and w.isRunning()]
+        if running:
+            InfoBar.warning(
+                title="Vyksta generavimas",
+                content="Palaukite, kol bus nukopijuoti failai, ir uždarykite programą iš naujo.",
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=4000,
+                parent=self
+            )
+            event.ignore()
+            return
         self.server_thread.stop()
         super().closeEvent(event)
 

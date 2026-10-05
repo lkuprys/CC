@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Podbase Container Button",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Adds a container creation button to mfgpodbase.com/uv",
   "icons": {
     "16": "icon16.png",
@@ -13,8 +13,13 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://mfgpodbase.com/*"],
-      "js": ["content.js"]
+      "matches": [
+        "https://mfgpodbase.com/*",
+        "https://*.mfgpodbase.com/*"
+      ],
+      "js": [
+        "content.js"
+      ]
     }
   ],
   "background": {
@@ -29,6 +34,11 @@
     }
   },
   "host_permissions": [
-    "<all_urls>"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ]
 }

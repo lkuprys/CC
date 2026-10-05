@@ -94,6 +94,17 @@ const KOLOSUS_MAPPING = [
   { match: /Laptop\s+Sleeve\s+13/i, template: 'Sleeve 13"' }
 ];
 
+// Puslapio tekstas įterpiamas į HTML tik išvalytas (kitaip produkto pavadinime esantis
+// <img onerror=...> būtų įvykdytas puslapyje)
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function getKolosusTemplate(rawName) {
   if (!rawName) return null;
   for (const rule of KOLOSUS_MAPPING) {
@@ -208,8 +219,8 @@ function enhanceProductsTable() {
           if (template) {
             const originalText = cell.innerText;
             cell.innerHTML = `
-              <span class="kolosus-badge">${template}</span>
-              <span class="kolosus-original-sub">${originalText}</span>
+              <span class="kolosus-badge">${escapeHtml(template)}</span>
+              <span class="kolosus-original-sub">${escapeHtml(originalText)}</span>
             `;
           }
         });
@@ -307,15 +318,15 @@ function renderGroupedView(container, targetTable) {
     let itemsHtml = "";
     group.items.forEach(it => {
       itemsHtml += `<div style="display: flex; justify-content: space-between; padding: 2px 0;">
-        <span>• ${it.originalName} ${it.id ? '(ID: ' + it.id + ')' : ''}</span>
-        <span style="font-weight: 600;">${it.pids} vnt.</span>
+        <span>• ${escapeHtml(it.originalName)} ${it.id ? '(ID: ' + escapeHtml(it.id) + ')' : ''}</span>
+        <span style="font-weight: 600;">${escapeHtml(it.pids)} vnt.</span>
       </div>`;
     });
 
     card.innerHTML = `
       <div class="kolosus-group-header">
-        <span style="font-weight: bold; color: #0f172a;">${group.template}</span>
-        <span class="kolosus-pids-badge">${group.totalPids} vnt.</span>
+        <span style="font-weight: bold; color: #0f172a;">${escapeHtml(group.template)}</span>
+        <span class="kolosus-pids-badge">${escapeHtml(group.totalPids)} vnt.</span>
       </div>
       <div class="kolosus-group-items">
         ${itemsHtml}
@@ -524,9 +535,16 @@ enhanceProductsTable();
 injectContainerButtons();
 
 // DOM Observer for dynamic SPA modal openings and page changes across stations
+// Pakeitimai sugrupuojami: puslapis perskenuojamas ne dažniau kaip kas 250 ms,
+// o mūsų pačių DOM pakeitimai nesukelia begalinio perskenavimo ciklo
+let enhanceTimer = null;
 const observer = new MutationObserver(() => {
-  enhanceProductsTable();
-  injectContainerButtons();
+  if (enhanceTimer) return;
+  enhanceTimer = setTimeout(() => {
+    enhanceTimer = null;
+    enhanceProductsTable();
+    injectContainerButtons();
+  }, 250);
 });
 
 observer.observe(document.body, { childList: true, subtree: true });

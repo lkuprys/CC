@@ -91,6 +91,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             git commit -m "Versija v${{ steps.ver.outputs.version }}"
             git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw "Nepavyko įkelti versijos į main (main pasikeitė?). Paleiskite iš naujo." }
           }
           git tag "v${{ steps.ver.outputs.version }}"
           git push origin "v${{ steps.ver.outputs.version }}"
