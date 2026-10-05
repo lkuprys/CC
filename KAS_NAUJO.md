@@ -15,3 +15,9 @@
 - Automatinis valymas trina tik programos sukurtus laikinus aplankus – jūsų aplankai „Konteineriai“ viduje nebeištrinami. (Iki šios versijos sukurtus aplankus vieną kartą ištrinkite rankiniu būdu.)
 - Du stalai tuo pačiu pavadinimu nebeištrina vienas kito aplanko (antras gauna _2).
 - Spaudos failų sąrašas atnaujinamas dažniau (kas 2 min. arba iškart, kai pagrindiniame aplanke atsiranda naujas failas).
+- Klaidų žurnalas podbase.log (Nustatymai → Atnaujinimai ir Versija → „Atidaryti žurnalą“): generavimo santraukos, nerasti failai, klaidos.
+- Antrą kartą paleidus programą, tiesiog iškeliamas jau atidarytas langas.
+- Užvedus pelę ant lizdo po generavimo matyti, kuris failas paimtas (pavadinimas, aplankas, data).
+- Įspėjimas, kai tam pačiam dizainui rasti keli vienodai tinkami failai (pvz., brokų ir įprastame aplanke).
+- Greitesnė failų paieška tinklo diske; pasirinkus modelį failai pradedami ieškoti iš anksto.
+- Miniatiūros įkeliamos fone – langas nebeužstringa.

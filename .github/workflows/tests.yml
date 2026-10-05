@@ -1,0 +1,32 @@
+name: Testai
+
+# Paleidžiama automatiškai po kiekvieno pakeitimo. Raudonas ženklas = kažkas sugedo.
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Įdiegti bibliotekas
+        run: |
+          python -m pip install --upgrade pip
+          pip install "PySide6>=6.5.0" "Flask>=3.0.0" "Werkzeug>=3.0.0" pytest pyflakes
+
+      - name: Sintaksė ir neapibrėžti vardai
+        run: |
+          python -m py_compile app_gui.py podbase_core.py api_server.py updater.py package_release.py
+          pyflakes podbase_core.py api_server.py app_gui.py | grep -v "imported but unused\|missing placeholders" && exit 1 || true
+
+      - name: Testai
+        run: python -m pytest -q

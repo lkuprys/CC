@@ -25,3 +25,4 @@ ENV/
 podbase.log
 podbase.log.*
 scan_index.json
+.pytest_cache/

@@ -1,0 +1,83 @@
+# -*- coding: utf-8 -*-
+"""Konteinerio generavimas nuo paieškos iki nukopijuotų failų."""
+import os
+
+
+def plan(src, dest, beds, hotfolder=False):
+    return {"source_dir": str(src), "dest_dir": str(dest), "hotfolder": hotfolder,
+            "beds": [{"bed_idx": i, "title": t, "items": items} for i, (t, items) in enumerate(beds)]}
+
+
+def test_scan_skips_ignored_folders_and_types(core, tmp_path, make_file):
+    src = tmp_path / "src"
+    make_file(src / "a" / "1001_x.png")
+    make_file(src / "DONE" / "1002_x.png")
+    make_file(src / "Batch Sheet 5" / "1003_x.png")
+    make_file(src / "1004_x.pdf")
+    make_file(src / "~1005_x.png")
+    names = sorted(f["filename"] for f in core.scan_print_files_recursive([str(src)]))
+    assert names == ["1001_x.png"]
+
+
+def test_temp_folder_job(core, tmp_path, make_file):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_file(src / "1001_front.png", b"A")
+    make_file(src / "sub" / "1002_x.png", b"B")
+    res = core.run_container_job(plan(src, out, [("BID-77", ["PID-1001", "PID-1002", "PID-9999"])]))
+
+    folder = out / "BID-77"
+    assert sorted(os.listdir(folder)) == ["01_BID-77.png", "02_PID-1002.png", "03_PID-9999_TRUKSTA.txt"]
+    assert (folder / "01_BID-77.png").read_bytes() == b"A"
+    assert res["copied"] == 2
+    assert res["missing"] == [(0, 2, "PID-9999")]
+    assert [(f[0], f[1]) for f in res["found"]] == [(0, 0), (0, 1)]
+    assert os.path.normpath(str(folder)) in core._load_temp_folders()
+
+
+def test_dangerous_title_cannot_escape(core, tmp_path, make_file):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_file(src / "1001_a.png")
+    keep = out / "kita.txt"
+    make_file(keep)
+    core.run_container_job(plan(src, out, [("..", ["PID-1001"])]))
+    assert keep.exists()
+    assert os.listdir(out / "Stalas_1") == ["01_Stalas_1.png"]
+
+
+def test_duplicate_titles_get_suffix(core, tmp_path, make_file):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_file(src / "1001_a.png")
+    make_file(src / "1002_a.png")
+    res = core.run_container_job(plan(src, out, [("X", ["PID-1001"]), ("X", ["PID-1002"])]))
+    assert sorted(os.listdir(out)) == ["X", "X_2"]
+    assert res["copied"] == 2
+
+
+def test_hotfolder_does_not_overwrite(core, tmp_path, make_file):
+    src, hot = tmp_path / "src", tmp_path / "hot"
+    make_file(src / "1001_a.png", b"NEW")
+    make_file(hot / "01_T.png", b"OLD")
+    core.run_container_job(plan(src, hot, [("T", ["PID-1001"])], hotfolder=True))
+    assert (hot / "01_T.png").read_bytes() == b"OLD"
+    assert (hot / "01_T_2.png").read_bytes() == b"NEW"
+    assert not any(n.endswith("TRUKSTA.txt") for n in os.listdir(hot))
+
+
+def test_ambiguous_match_warns_and_takes_newest(core, tmp_path, make_file, now):
+    src, rejected, out = tmp_path / "src", tmp_path / "rejected", tmp_path / "out"
+    make_file(src / "1001_a.png", b"OLD", mtime=now - 1000)
+    make_file(rejected / "1001_a.png", b"NEW", mtime=now - 10)
+    core.save_app_config({"reject_folder": str(rejected)})
+    res = core.run_container_job(plan(src, out, [("T", ["PID-1001"])]))
+    assert (out / "T" / "01_T.png").read_bytes() == b"NEW"
+    assert res["ambiguous"] == [(0, 0)]
+    assert len(res["warnings"]) == 1 and "PID-1001" in res["warnings"][0]
+
+
+def test_cache_rescans_when_file_appears(core, tmp_path, make_file):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_file(src / "1001_a.png")
+    core.run_container_job(plan(src, out, [("T", ["PID-1001"])]))
+    make_file(src / "deep" / "er" / "1002_a.png")
+    res = core.run_container_job(plan(src, out, [("T", ["PID-1002"])]))
+    assert res["copied"] == 1 and res["missing"] == []

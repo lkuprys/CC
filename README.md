@@ -84,6 +84,23 @@ Versijos numeris padidinamas automatiškai. Atnaujinimo žurnalas kompiuteryje: 
 
 ---
 
+## 🧪 Testai
+
+Programos logika (paieška, failų pavadinimai, generavimas, valymas, API) tikrinama automatiškai:
+
+```bash
+pip install pytest
+python -m pytest -q
+```
+
+GitHub'e testai paleidžiami po kiekvieno pakeitimo (*Actions → Testai*) ir prieš kiekvieną išleidimą – jei testai nepraeina, nauja versija neišleidžiama.
+
+Kodo struktūra: `podbase_core.py` – logika be sąsajos, `api_server.py` – naršyklės plėtinio API, `app_gui.py` – sąsaja, `updater.py` – atnaujinimai.
+
+## 🩺 Klaidų žurnalas
+
+Programa rašo žurnalą `podbase.log` šalia `.exe` (*Nustatymai → Atnaujinimai ir Versija → Atidaryti žurnalą*). Ten matyti kiekvieno generavimo santrauka, nerasti failai, įspėjimai ir klaidos.
+
 ## ⚙️ Nustatymai (`config.json`)
 
 ```json

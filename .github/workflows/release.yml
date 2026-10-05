@@ -59,6 +59,12 @@ jobs:
         shell: pwsh
         run: python -m py_compile app_gui.py podbase_core.py api_server.py updater.py package_release.py
 
+      - name: Testai
+        shell: pwsh
+        run: |
+          pip install pytest
+          python -m pytest -q
+
       - name: Kompiliuoti programą
         shell: pwsh
         run: >

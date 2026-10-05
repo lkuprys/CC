@@ -19,7 +19,7 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
+from PySide6.QtCore import Qt, QThread, QThreadPool, QRunnable, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QImage, QImageReader, QDrag, QCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -45,7 +45,7 @@ from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_C
 
 from podbase_core import (
     BASE_DIR, DESKTOP_DIR, ICON_FILE, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
-    get_cleanup_expiry_seconds,
+    get_cleanup_expiry_seconds, prefetch_scanned_files,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
@@ -59,22 +59,67 @@ _THUMB_CACHE_MAX = 300
 _thumb_cache = {}
 
 
-def _thumb_key(url, dim):
-    try:
-        mtime = os.path.getmtime(url) if os.path.exists(url) else 0
-    except OSError:
-        mtime = 0
-    return (url, mtime, dim)
-
-
 def _thumb_cache_get(url, dim):
-    return _thumb_cache.get(_thumb_key(url, dim))
+    return _thumb_cache.get((url, dim))
 
 
 def _thumb_cache_put(url, dim, pix):
     if len(_thumb_cache) >= _THUMB_CACHE_MAX:
         _thumb_cache.pop(next(iter(_thumb_cache)))
-    _thumb_cache[_thumb_key(url, dim)] = pix
+    _thumb_cache[(url, dim)] = pix
+
+
+class _ThumbnailLoader(QObject):
+    """Vietinių (dažnai tinklo diske esančių) failų miniatiūros dekoduojamos fone."""
+    loaded = Signal(str, int, QImage)
+
+    def __init__(self):
+        super().__init__()
+        self.pool = QThreadPool()
+        self.pool.setMaxThreadCount(2)
+        self.pending = set()
+        self.loaded.connect(lambda url, dim, _img: self.pending.discard((url, dim)))
+
+    def request(self, path, dim):
+        if (path, dim) in self.pending:
+            return
+        self.pending.add((path, dim))
+        self.pool.start(_LocalThumbTask(path, dim, self))
+
+
+class _LocalThumbTask(QRunnable):
+    def __init__(self, path, dim, loader):
+        super().__init__()
+        self.path = path
+        self.dim = dim
+        self.loader = loader
+
+    def run(self):
+        img = QImage()
+        try:
+            if os.path.isfile(self.path):
+                reader = QImageReader(self.path)
+                reader.setAutoTransform(True)
+                size = reader.size()
+                if size.isValid() and (size.width() > self.dim * 2 or size.height() > self.dim * 2):
+                    # Dideli spaudos failai dekoduojami iškart sumažinti – greičiau ir mažiau atminties
+                    reader.setScaledSize(size.scaled(self.dim * 2, self.dim * 2, Qt.KeepAspectRatio))
+                img = reader.read()
+                if not img.isNull():
+                    img = img.scaled(self.dim, self.dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        except Exception as e:
+            log.warning(f"Miniatiūros klaida {self.path}: {e}")
+        self.loader.loaded.emit(self.path, self.dim, img)
+
+
+_thumb_loader = None
+
+
+def thumbnail_loader():
+    global _thumb_loader
+    if _thumb_loader is None:
+        _thumb_loader = _ThumbnailLoader()
+    return _thumb_loader
 
 
 # ----------------- DRAG & DROP MIME PARSER -----------------
@@ -160,6 +205,7 @@ class UVSlotWidget(ElevatedCardWidget):
         self.grid_c = col
         self.item_idx = None
         self.is_single_row = is_single_row
+        thumbnail_loader().loaded.connect(self._on_local_thumb_loaded)
         self.design_name = ""
         self.design_url = ""
         self.current_reply = None
@@ -378,24 +424,24 @@ class UVSlotWidget(ElevatedCardWidget):
             if cached is not None:
                 self.thumb_label.setPixmap(cached)
                 self.thumb_label.setText("")
-            elif os.path.exists(self.design_url):
-                reader = QImageReader(self.design_url)
-                reader.setAutoTransform(True)
-                size = reader.size()
-                if size.isValid() and (size.width() > thumb_dim * 2 or size.height() > thumb_dim * 2):
-                    # Dideli spaudos failai dekoduojami iškart sumažinti – greičiau ir mažiau atminties
-                    reader.setScaledSize(size.scaled(thumb_dim * 2, thumb_dim * 2, Qt.KeepAspectRatio))
-                img = reader.read()
-                if not img.isNull():
-                    pix = QPixmap.fromImage(img).scaled(thumb_dim, thumb_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    _thumb_cache_put(self.design_url, thumb_dim, pix)
-                    self.thumb_label.setPixmap(pix)
-                    self.thumb_label.setText("")
-            else:
+            elif self.design_url.lower().startswith(("http://", "https://")):
                 self.load_thumbnail(self.design_url)
+            else:
+                # Vietinis / tinklo kelias – įkeliama fone, langas neužstringa
+                thumbnail_loader().request(self.design_url, thumb_dim)
         else:
             self.thumb_label.setText("🎨")
             self.thumb_label.setStyleSheet("font-size: 22px; color: #10b981;")
+
+    def _on_local_thumb_loaded(self, url, dim, img):
+        if img.isNull():
+            return
+        pix = QPixmap.fromImage(img)
+        _thumb_cache_put(url, dim, pix)
+        thumb_dim = 95 if self.is_single_row else 75
+        if self.is_occupied() and self.design_url == url and thumb_dim == dim:
+            self.thumb_label.setPixmap(pix)
+            self.thumb_label.setText("")
 
     def set_empty(self, placeholder_num=None):
         self.stop_blinking()
@@ -798,6 +844,7 @@ class ContainerStudioInterface(QWidget):
         m_data = self.get_selected_model_data()
         if not m_data:
             return
+        prefetch_scanned_files(m_data.get("source", ""))
 
         jig_id = m_data.get("jig_id", "jig_2x5")
         jig = next((j for j in self.jigs_data if j.get("id") == jig_id), None)

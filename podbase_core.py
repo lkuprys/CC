@@ -292,7 +292,19 @@ def build_search_roots(source_dir):
         search_roots.append(source_dir)
     return search_roots
 
+def _is_ignored_dir(name):
+    low = name.lower()
+    return (name.startswith(('.', '~', '$'))
+            or low.strip() in IGNORED_FOLDER_NAMES
+            or 'batch sheet' in low or 'batchsheet' in low
+            or 'trash' in low or 'done' in low)
+
+
 def scan_print_files_recursive(search_roots):
+    """
+    Rekursyviai suranda spaudos failus. Naudojamas os.scandir: Windows'e failo data gaunama
+    kartu su aplanko sąrašu, todėl tinklo diske nereikia atskiros užklausos kiekvienam failui.
+    """
     if isinstance(search_roots, str):
         search_roots = [search_roots]
 
@@ -307,47 +319,49 @@ def scan_print_files_recursive(search_roots):
             continue
         visited_roots.add(norm_root)
 
-        try:
-            for dirpath, dirnames, filenames in os.walk(norm_root):
-                dirnames[:] = [
-                    d for d in dirnames
-                    if not d.startswith(('.', '~', '$'))
-                    and d.lower().strip() not in IGNORED_FOLDER_NAMES
-                    and 'batch sheet' not in d.lower()
-                    and 'batchsheet' not in d.lower()
-                    and 'trash' not in d.lower()
-                    and 'done' not in d.lower()
-                ]
+        stack = [norm_root]
+        while stack:
+            dirpath = stack.pop()
+            try:
+                with os.scandir(dirpath) as it:
+                    entries = list(it)
+            except OSError as e:
+                log.warning(f"[scan_print_files_recursive klaida ties {dirpath}]: {e}")
+                continue
 
-                for fname in filenames:
-                    fname_lower = fname.lower()
-                    if fname.startswith(('.', '~', '$')):
+            for entry in entries:
+                fname = entry.name
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if not _is_ignored_dir(fname):
+                            stack.append(entry.path)
                         continue
-                    if any(kw in fname_lower for kw in IGNORED_FILE_KEYWORDS):
-                        continue
-                    ext = os.path.splitext(fname_lower)[1]
-                    if ext not in SUPPORTED_IMAGE_EXTENSIONS:
-                        continue
+                except OSError:
+                    continue
 
-                    stem = os.path.splitext(fname)[0]
-                    stem_lower = stem.lower()
-                    full_path = os.path.join(dirpath, fname)
-                    
-                    try:
-                        mtime = os.path.getmtime(full_path)
-                    except Exception:
-                        mtime = 0
+                fname_lower = fname.lower()
+                if fname.startswith(('.', '~', '$')):
+                    continue
+                if any(kw in fname_lower for kw in IGNORED_FILE_KEYWORDS):
+                    continue
+                ext = os.path.splitext(fname_lower)[1]
+                if ext not in SUPPORTED_IMAGE_EXTENSIONS:
+                    continue
 
-                    scanned_files.append({
-                        "filename": fname,
-                        "fname_lower": fname_lower,
-                        "stem": stem,
-                        "stem_lower": stem_lower,
-                        "path": full_path,
-                        "mtime": mtime
-                    })
-        except Exception as e:
-            log.warning(f"[scan_print_files_recursive klaida ties {root_dir}]: {e}")
+                stem = os.path.splitext(fname)[0]
+                try:
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    mtime = 0
+
+                scanned_files.append({
+                    "filename": fname,
+                    "fname_lower": fname_lower,
+                    "stem": stem,
+                    "stem_lower": stem.lower(),
+                    "path": entry.path,
+                    "mtime": mtime
+                })
 
     return scanned_files
 
@@ -443,20 +457,42 @@ _scan_cache = {}
 _scan_cache_lock = threading.Lock()
 
 
+_scan_key_locks = {}
+
+
+def _scan_lock_for(key):
+    with _scan_cache_lock:
+        return _scan_key_locks.setdefault(key, threading.Lock())
+
+
 def get_scanned_files(search_roots, force=False):
     """Grąžina (failų sąrašas, ar paimta iš atminties)."""
     key = tuple(os.path.normcase(os.path.normpath(r)) for r in search_roots)
-    roots_mtime = _roots_mtime(search_roots)
-    if not force:
+    requested_at = time.time()
+    # Tie patys aplankai skenuojami tik vieną kartą vienu metu (pvz., išankstinis skenavimas ir generavimas)
+    with _scan_lock_for(key):
+        roots_mtime = _roots_mtime(search_roots)
         with _scan_cache_lock:
             hit = _scan_cache.get(key)
-        # Jei pagrindiniame aplanke atsirado / dingo failas, sąrašas nebeaktualus
-        if hit and time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS and hit[2] == roots_mtime:
-            return hit[1], True
-    files = scan_print_files_recursive(search_roots)
-    with _scan_cache_lock:
-        _scan_cache[key] = (time.time(), files, roots_mtime)
-    return files, False
+        if hit and hit[2] == roots_mtime:
+            fresh = time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS
+            # force: tinka tik sąrašas, nuskaitytas jau po šios užklausos (ką tik baigtas kitos gijos)
+            if (not force and fresh) or (force and hit[0] >= requested_at):
+                return hit[1], not force
+        files = scan_print_files_recursive(search_roots)
+        with _scan_cache_lock:
+            _scan_cache[key] = (time.time(), files, roots_mtime)
+        return files, False
+
+
+def prefetch_scanned_files(source_dir):
+    """Pradeda skenuoti modelio aplankus fone, kad paspaudus „Generuoti“ sąrašas jau būtų paruoštas."""
+    def _run():
+        try:
+            get_scanned_files(build_search_roots(source_dir))
+        except Exception as e:
+            log.warning(f"[išankstinis skenavimas]: {e}")
+    threading.Thread(target=_run, name="prefetch-scan", daemon=True).start()
 
 
 def _roots_mtime(search_roots):
