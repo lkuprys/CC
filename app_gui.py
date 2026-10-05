@@ -5,6 +5,7 @@ import re
 import json
 import time
 import math
+import copy
 import shutil
 import threading
 from pathlib import Path
@@ -398,6 +399,154 @@ def format_output_filename(num_prefix, design_name, source_filepath, custom_name
                 base_name = design_name.strip()
 
     return f"{num_prefix}_{base_name}{ext}"
+
+# ----------------- KONTEINERIO GENERAVIMAS FONE (be užstrigimo) -----------------
+# Tinklo aplankų skenavimas gali užtrukti, todėl rezultatas trumpam įsimenamas.
+# Jei su įsimintu sąrašu kurio nors failo nerandama, sąrašas automatiškai perskenuojamas.
+SCAN_CACHE_TTL_SECONDS = 300
+_scan_cache = {}
+_scan_cache_lock = threading.Lock()
+
+
+def get_scanned_files(search_roots, force=False):
+    """Grąžina (failų sąrašas, ar paimta iš atminties)."""
+    key = tuple(os.path.normcase(os.path.normpath(r)) for r in search_roots)
+    if not force:
+        with _scan_cache_lock:
+            hit = _scan_cache.get(key)
+        if hit and time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS:
+            return hit[1], True
+    files = scan_print_files_recursive(search_roots)
+    with _scan_cache_lock:
+        _scan_cache[key] = (time.time(), files)
+    return files, False
+
+
+def safe_copy_file(src, dst):
+    """
+    Kopijuoja laikinu pavadinimu (.part) ir tik pabaigus pervadina.
+    Taip ColorGATE niekada nepaima pusiau nukopijuoto failo.
+    """
+    tmp = dst + ".part"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
+def run_container_job(plan, progress=None):
+    """
+    Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
+
+    plan = {
+        "source_dir": str, "dest_dir": str, "hotfolder": bool,
+        "beds": [{"bed_idx": int, "title": str, "items": [dizaino pavadinimas, ...]}]
+    }
+    Grąžina {"copied", "missing": [(bed_idx, item_idx, name)], "errors", "folders", "search_roots"}.
+    """
+    def report(text, done=0, total=0):
+        if progress:
+            progress(done, total, text)
+
+    result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": []}
+
+    report("Tikrinami paieškos aplankai...")
+    search_roots = build_search_roots(plan.get("source_dir", ""))
+    result["search_roots"] = search_roots
+
+    def match_all(scanned):
+        return {
+            (b["bed_idx"], i): find_matching_file_for_design(name, scanned)
+            for b in plan["beds"] for i, name in enumerate(b["items"])
+        }
+
+    report("Ieškoma spaudos failų...")
+    scanned, from_cache = get_scanned_files(search_roots)
+    matches = match_all(scanned)
+    if from_cache and any(v is None or not os.path.exists(v) for v in matches.values()):
+        report("Atnaujinamas failų sąrašas...")
+        scanned, _ = get_scanned_files(search_roots, force=True)
+        matches = match_all(scanned)
+
+    is_hot = plan.get("hotfolder", False)
+    dest_dir = plan.get("dest_dir", "")
+    if is_hot:
+        os.makedirs(dest_dir, exist_ok=True)
+
+    total = len(matches)
+    done = 0
+    for b in plan["beds"]:
+        title = b["title"]
+        if is_hot:
+            target_dir = dest_dir
+        else:
+            base_out = dest_dir or DESKTOP_DIR
+            try:
+                os.makedirs(base_out, exist_ok=True)
+            except Exception:
+                base_out = DESKTOP_DIR
+                os.makedirs(base_out, exist_ok=True)
+            target_dir = os.path.join(base_out, title)
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+            os.makedirs(target_dir, exist_ok=True)
+        if target_dir not in result["folders"]:
+            result["folders"].append(target_dir)
+
+        for i, name in enumerate(b["items"]):
+            done += 1
+            report(f"Kopijuojama {done} iš {total}...", done, total)
+            num_prefix = f"{i + 1:02d}"
+            custom_name = title if i == 0 and title else None
+            found = matches.get((b["bed_idx"], i))
+
+            if found:
+                try:
+                    dst_name = format_output_filename(num_prefix, name, found, custom_name=custom_name)
+                    safe_copy_file(found, os.path.join(target_dir, dst_name))
+                    result["copied"] += 1
+                    continue
+                except Exception as e:
+                    result["errors"].append(f"{name}: {e}")
+
+            result["missing"].append((b["bed_idx"], i, name))
+
+            # Laikiname aplanke paliekame žymą; į HotFolderį nieko pašalinio nerašome
+            if not is_hot:
+                pid_m = re.search(r'PID[-_:\s]*(\d+)', name, re.IGNORECASE)
+                label = custom_name or (f"PID-{pid_m.group(1)}" if pid_m else name)
+                clean_lbl = re.sub(r'[\\/*?:"<>|]', "", label).strip()
+                try:
+                    with open(os.path.join(target_dir, f"{num_prefix}_{clean_lbl}_TRUKSTA.txt"), "w", encoding="utf-8") as df:
+                        df.write("Dizainas nerastas tarp nuskaitytu failu aplankuose:\n" + "\n".join(search_roots))
+                except Exception:
+                    pass
+
+    return result
+
+
+class ContainerJobWorker(QThread):
+    progress = Signal(int, int, str)   # (atlikta, iš viso, tekstas)
+    finished_ok = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, plan, parent=None):
+        super().__init__(parent)
+        self.plan = plan
+
+    def run(self):
+        try:
+            res = run_container_job(self.plan, lambda d, t, txt: self.progress.emit(d, t, txt))
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished_ok.emit(res)
+
+
+def missing_label(name):
+    pid_m = re.search(r'PID[-_:\s]*(\d+)', name or "", re.IGNORECASE)
+    return f"PID-{pid_m.group(1)}" if pid_m else (name or "?")
+
 
 # ----------------- DATA HELPERS FOR JIGS AND MODELS -----------------
 def load_jigs_data():
@@ -846,6 +995,8 @@ class ContainerStudioInterface(QWidget):
         self.bed_names = [""]
         self.current_bed_index = 0
         self.missing_items_by_bed = {}
+        self._job_worker = None
+        self._job_context = None
 
         self.setAcceptDrops(True)
         self.load_data()
@@ -1551,6 +1702,9 @@ class ContainerStudioInterface(QWidget):
         )
 
     def generate_container(self):
+        if self._job_worker is not None and self._job_worker.isRunning():
+            return
+
         self.save_current_bed_state()
         self.missing_items_by_bed.clear()
 
@@ -1582,158 +1736,158 @@ class ContainerStudioInterface(QWidget):
         source_dir = m_data.get("source", "").strip()
         dest_dir = m_data.get("destination", "").strip()
         output_mode = m_data.get("output_mode", "temp_folder")
-
-        search_roots = build_search_roots(source_dir)
-
-        scanned_files = scan_print_files_recursive(search_roots)
-
-        total_copied = 0
-        total_missing = []
-        target_dest_dirs = []
-
         is_direct_hotfolder = (output_mode == "direct_hotfolder")
 
-        if is_direct_hotfolder:
-            if not dest_dir:
-                InfoBar.error(
-                    title="Nenurodytas HotFolderio kelias!",
-                    content="Šiam modeliui nustatymuose nenurodytas 'Paskirtis (HotFolderis)' kelias.\nNustatykite jį Nustatymų skirtuke.",
-                    orient=Qt.Horizontal,
-                    position=InfoBarPosition.TOP_RIGHT,
-                    duration=6000,
-                    parent=self
-                )
-                return
-            try:
-                os.makedirs(dest_dir, exist_ok=True)
-            except Exception as e:
-                InfoBar.error(
-                    title="HotFolderio klaida!",
-                    content=f"Nepavyko pasiekti/sukurti HotFolderio aplanko:\n{dest_dir}\nKlaida: {str(e)}",
-                    orient=Qt.Horizontal,
-                    position=InfoBarPosition.TOP_RIGHT,
-                    duration=7000,
-                    parent=self
-                )
-                return
+        if is_direct_hotfolder and not dest_dir:
+            InfoBar.error(
+                title="Nenurodytas HotFolderio kelias!",
+                content="Šiam modeliui nustatymuose nenurodytas 'Paskirtis (HotFolderis)' kelias.\nNustatykite jį Nustatymų skirtuke.",
+                orient=Qt.Horizontal,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=6000,
+                parent=self
+            )
+            return
 
-        for bed_idx, (bed_num, occupied_items) in enumerate(valid_beds):
+        beds_plan = []
+        for bed_num, occupied_items in valid_beds:
             real_bed_idx = bed_num - 1
             if real_bed_idx < len(self.bed_names) and self.bed_names[real_bed_idx]:
                 bed_title = self.bed_names[real_bed_idx]
             else:
                 bed_title = f"Stalas_{bed_num}"
-
             clean_bed_title = re.sub(r'[\\/*?:"<>|]', "", bed_title).strip() or f"Stalas_{bed_num}"
+            beds_plan.append({
+                "bed_idx": real_bed_idx,
+                "title": clean_bed_title,
+                "items": [it.get("name", "") for it in occupied_items]
+            })
 
-            if is_direct_hotfolder:
-                target_container_dir = dest_dir
-                target_dest_dirs.append(dest_dir)
-            else:
-                base_out = dest_dir if dest_dir else DESKTOP_DIR
-                try:
-                    os.makedirs(base_out, exist_ok=True)
-                except Exception:
-                    base_out = DESKTOP_DIR
-                    os.makedirs(base_out, exist_ok=True)
-
-                target_container_dir = os.path.join(base_out, clean_bed_title)
-                
-                if os.path.exists(target_container_dir):
-                    shutil.rmtree(target_container_dir, ignore_errors=True)
-                os.makedirs(target_container_dir, exist_ok=True)
-                target_dest_dirs.append(target_container_dir)
-
-            for slot_idx_0, item in enumerate(occupied_items):
-                d_name = item.get("name", "")
-                num_prefix = f"{slot_idx_0 + 1:02d}"
-
-                found_path = find_matching_file_for_design(d_name, scanned_files)
-
-                custom_name = None
-                if slot_idx_0 == 0 and clean_bed_title:
-                    custom_name = clean_bed_title
-
-                if found_path:
-                    dst_name = format_output_filename(num_prefix, d_name, found_path, custom_name=custom_name)
-                    dst_file = os.path.join(target_container_dir, dst_name)
-                    shutil.copy2(found_path, dst_file)
-                    total_copied += 1
-                else:
-                    pid_m = re.search(r'PID[-_:\s]*(\d+)', d_name, re.IGNORECASE)
-                    if custom_name:
-                        fallback_label = custom_name
-                    elif pid_m:
-                        fallback_label = f"PID-{pid_m.group(1)}"
-                    else:
-                        fallback_label = d_name
-                    clean_lbl = re.sub(r'[\\/*?:"<>|]', "", fallback_label).strip()
-                    dummy_file = os.path.join(target_container_dir, f"{num_prefix}_{clean_lbl}_TRUKSTA.txt")
-                    try:
-                        with open(dummy_file, "w", encoding="utf-8") as df:
-                            df.write(f"Dizainas nerastas tarp nuskaitytu failu aplankuose:\n" + "\n".join(search_roots))
-                    except Exception:
-                        pass
+        plan = {
+            "source_dir": source_dir,
+            "dest_dir": dest_dir,
+            "hotfolder": is_direct_hotfolder,
+            "beds": beds_plan
+        }
 
         main_job_name = self.bed_names[0] if self.bed_names and self.bed_names[0] else m_data.get("name", "Job")
-        history_entry = {
-            "id": f"hist_{int(time.time())}",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "job_name": main_job_name,
-            "bed_names": list(self.bed_names),
-            "model_name": m_data.get("name", ""),
-            "jig_name": self.active_jig.get("name", "") if self.active_jig else "",
-            "output_mode": output_mode,
-            "total_beds": len(valid_beds),
-            "total_designs": sum(len(items) for _, items in valid_beds),
-            "beds": self.beds,
-            "folders": target_dest_dirs,
-            "source_dir": source_dir,
-            "dest_dir": dest_dir
+        self._job_context = {
+            "is_hot": is_direct_hotfolder,
+            "dest_dir": dest_dir,
+            "bed_count": len(valid_beds),
+            "beds_snapshot": [[(it or {}).get("name") for it in bed] for bed in self.beds],
+            "history": {
+                "id": f"hist_{int(time.time())}",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "job_name": main_job_name,
+                "bed_names": list(self.bed_names),
+                "model_name": m_data.get("name", ""),
+                "jig_name": self.active_jig.get("name", "") if self.active_jig else "",
+                "output_mode": output_mode,
+                "total_beds": len(valid_beds),
+                "total_designs": sum(len(items) for _, items in valid_beds),
+                "beds": copy.deepcopy(self.beds),
+                "source_dir": source_dir,
+                "dest_dir": dest_dir
+            }
         }
-        add_history_entry(history_entry)
+
+        self._set_generate_busy(True)
+        worker = ContainerJobWorker(plan, self)
+        worker.progress.connect(self._on_job_progress)
+        worker.finished_ok.connect(self._on_job_finished)
+        worker.failed.connect(self._on_job_failed)
+        self._job_worker = worker
+        worker.start()
+
+    def _set_generate_busy(self, busy):
+        self.btn_generate.setEnabled(not busy)
+        if busy:
+            self.btn_generate.setText("⏳  Ieškoma spaudos failų...")
+            return
+        m_data = self.get_selected_model_data() or {}
+        if m_data.get("output_mode", "temp_folder") == "direct_hotfolder":
+            self.btn_generate.setText("🚀  SIŲSTI TIESIAI Į HOTFOLDERĮ")
+        else:
+            self.btn_generate.setText("🚀  SUKURTI KONTEINERĮ (10 min. laikinas)")
+
+    def _on_job_progress(self, done, total, text):
+        self.btn_generate.setText(f"⏳  {text}")
+
+    def _on_job_failed(self, err_msg):
+        self._set_generate_busy(False)
+        InfoBar.error(
+            title="Klaida kuriant konteinerį!",
+            content=err_msg,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,
+            parent=self
+        )
+
+    def _on_job_finished(self, res):
+        self._set_generate_busy(False)
+        ctx = self._job_context or {}
+        is_hot = ctx.get("is_hot", False)
+
+        history_entry = dict(ctx.get("history", {}))
+        history_entry["folders"] = res.get("folders", [])
+        try:
+            add_history_entry(history_entry)
+        except Exception as e:
+            print(f"[history klaida]: {e}")
         self.container_generated.emit()
 
-        if total_missing:
-            first_missing_bed = min(self.missing_items_by_bed.keys())
-            self.current_bed_index = first_missing_bed
-            self.render_current_bed()
-            
+        missing = res.get("missing", [])
+        errors = res.get("errors", [])
+
+        # Mirksintys lizdai – tik jei stalas nepasikeitė, kol vyko kopijavimas
+        current_snapshot = [[(it or {}).get("name") for it in bed] for bed in self.beds]
+        if missing and current_snapshot == ctx.get("beds_snapshot"):
+            self.missing_items_by_bed.clear()
+            for bed_idx, item_idx, _name in missing:
+                self.missing_items_by_bed.setdefault(bed_idx, set()).add(item_idx)
+            self.current_bed_index = min(self.missing_items_by_bed.keys())
+        self.render_current_bed()
+
+        if not is_hot:
+            for fold in res.get("folders", []):
+                try:
+                    if os.path.exists(fold):
+                        os.startfile(fold)
+                except Exception as e:
+                    print(f"startfile error: {e}")
+
+        if missing:
+            names = ", ".join(missing_label(n) for _, _, n in missing)
+            content = f"Nerasti {len(missing)} failai: {names}\nNukopijuota: {res.get('copied', 0)}. Trūkstami lizdai mirksi raudonai."
+            if errors:
+                content += "\nKopijavimo klaidos: " + "; ".join(errors[:3])
             InfoBar.error(
-                title="⚠️ DĖMESIO: Nerasti spaudos failai!",
-                content=f"Nepavyko rasti failų šiems dizainams: {', '.join(total_missing)}\nLizdai pažymėti mirksinčiu raudonu rėmeliu!",
+                title="⚠️ DĖMESIO: Ne visi failai išsiųsti!",
+                content=content,
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP_RIGHT,
-                duration=7000,
+                duration=-1,
                 parent=self
             )
+            return
+
+        if is_hot:
+            msg = f"Failai ({res.get('copied', 0)} vnt.) sėkmingai nusiųsti tiesiai į HotFolderį!\n📁 {ctx.get('dest_dir', '')}"
         else:
-            self.render_current_bed()
-
-        for fold in set(target_dest_dirs):
-            try:
-                if os.path.exists(fold):
-                    os.startfile(fold)
-            except Exception as e:
-                print(f"startfile error: {e}")
-
-        if not total_missing:
-            if is_direct_hotfolder:
-                msg = f"Failai ({total_copied} vnt.) sėkmingai nusiųsti tiesiai į HotFolderį!\n📁 {dest_dir}"
-            else:
-                msg = f"Konteinerio aplankas sukurtas ({len(valid_beds)} stalai, {total_copied} failų).\n⏳ Po 10 min. laikinas aplankas automatiškai išsivalys!"
-
-            InfoBar.success(
-                title="Konteineris sukurtas!",
-                content=msg,
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=4500,
-                parent=self
-            )
-
+            msg = f"Konteinerio aplankas sukurtas ({ctx.get('bed_count', 0)} stalai, {res.get('copied', 0)} failų).\n⏳ Po 10 min. laikinas aplankas automatiškai išsivalys!"
+        InfoBar.success(
+            title="Konteineris sukurtas!",
+            content=msg,
+            orient=Qt.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=4500,
+            parent=self
+        )
 
 # ----------------- HISTORY INTERFACE -----------------
 class HistoryInterface(QWidget):
@@ -1744,6 +1898,8 @@ class HistoryInterface(QWidget):
         self.history_items = []
         self.filtered_items = []
         self.selected_item = None
+        self._job_worker = None
+        self._regen_btn_text = "⚡ Greitas nusiuntimas į aplanką"
         self.init_ui()
         self.reload_history()
 
@@ -1932,6 +2088,8 @@ class HistoryInterface(QWidget):
     def quick_regenerate_selected(self):
         if not self.selected_item:
             return
+        if self._job_worker is not None and self._job_worker.isRunning():
+            return
 
         it = self.selected_item
         source_dir = it.get("source_dir", "").strip()
@@ -1939,29 +2097,16 @@ class HistoryInterface(QWidget):
         job_title = it.get("job_name", "Job")
         beds = it.get("beds", [])
         bed_names = it.get("bed_names", [])
-        output_mode = it.get("output_mode", "temp_folder")
+        is_direct_hotfolder = (it.get("output_mode", "temp_folder") == "direct_hotfolder")
 
-        search_roots = build_search_roots(source_dir)
-
-        scanned_files = scan_print_files_recursive(search_roots)
-        total_copied = 0
-        target_dest_dirs = []
-
-        is_direct_hotfolder = (output_mode == "direct_hotfolder")
-
-        if is_direct_hotfolder:
-            if not dest_dir:
-                InfoBar.error(
-                    title="Nenurodytas HotFolderis!",
-                    content="Šiam modeliui nenurodytas paskirties HotFolderis.",
-                    position=InfoBarPosition.TOP_RIGHT,
-                    parent=self
-                )
-                return
-            try:
-                os.makedirs(dest_dir, exist_ok=True)
-            except Exception:
-                pass
+        if is_direct_hotfolder and not dest_dir:
+            InfoBar.error(
+                title="Nenurodytas HotFolderis!",
+                content="Šiam modeliui nenurodytas paskirties HotFolderis.",
+                position=InfoBarPosition.TOP_RIGHT,
+                parent=self
+            )
+            return
 
         valid_beds = []
         for idx, bed_items in enumerate(beds):
@@ -1969,57 +2114,77 @@ class HistoryInterface(QWidget):
             if occupied:
                 valid_beds.append((idx + 1, occupied))
 
-        for bed_idx, (bed_num, occupied_items) in enumerate(valid_beds):
+        beds_plan = []
+        for bed_num, occupied_items in valid_beds:
             real_bed_idx = bed_num - 1
             if real_bed_idx < len(bed_names) and bed_names[real_bed_idx]:
                 bed_title = bed_names[real_bed_idx]
             else:
                 bed_title = f"{job_title}_{bed_num}" if len(valid_beds) > 1 else job_title
-
             clean_bed_title = re.sub(r'[\\/*?:"<>|]', "", bed_title).strip() or f"Stalas_{bed_num}"
+            beds_plan.append({
+                "bed_idx": real_bed_idx,
+                "title": clean_bed_title,
+                "items": [x.get("name", "") for x in occupied_items]
+            })
 
-            if is_direct_hotfolder:
-                target_container_dir = dest_dir
-                target_dest_dirs.append(dest_dir)
-            else:
-                base_out = dest_dir if dest_dir else DESKTOP_DIR
+        plan = {
+            "source_dir": source_dir,
+            "dest_dir": dest_dir,
+            "hotfolder": is_direct_hotfolder,
+            "beds": beds_plan
+        }
+
+        self.btn_quick_regenerate.setEnabled(False)
+        self.btn_quick_regenerate.setText("⏳ Siunčiama...")
+        worker = ContainerJobWorker(plan, self)
+        worker.progress.connect(lambda d, t, txt: self.btn_quick_regenerate.setText(f"⏳ {txt}"))
+        worker.finished_ok.connect(lambda res: self._on_regenerate_finished(res, job_title, is_direct_hotfolder))
+        worker.failed.connect(self._on_regenerate_failed)
+        self._job_worker = worker
+        worker.start()
+
+    def _restore_regenerate_button(self):
+        self.btn_quick_regenerate.setText(self._regen_btn_text)
+        self.btn_quick_regenerate.setEnabled(self.selected_item is not None)
+
+    def _on_regenerate_failed(self, err_msg):
+        self._restore_regenerate_button()
+        InfoBar.error(
+            title="Klaida pergeneruojant!",
+            content=err_msg,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=-1,
+            parent=self
+        )
+
+    def _on_regenerate_finished(self, res, job_title, is_direct_hotfolder):
+        self._restore_regenerate_button()
+
+        if not is_direct_hotfolder:
+            for fold in res.get("folders", []):
                 try:
-                    os.makedirs(base_out, exist_ok=True)
+                    if os.path.exists(fold):
+                        os.startfile(fold)
                 except Exception:
-                    base_out = DESKTOP_DIR
-                    os.makedirs(base_out, exist_ok=True)
+                    pass
 
-                target_container_dir = os.path.join(base_out, clean_bed_title)
-                if os.path.exists(target_container_dir):
-                    shutil.rmtree(target_container_dir, ignore_errors=True)
-                os.makedirs(target_container_dir, exist_ok=True)
-                target_dest_dirs.append(target_container_dir)
-
-            for slot_idx_0, item in enumerate(occupied_items):
-                d_name = item.get("name", "")
-                num_prefix = f"{slot_idx_0 + 1:02d}"
-                found_path = find_matching_file_for_design(d_name, scanned_files)
-
-                custom_name = clean_bed_title if slot_idx_0 == 0 and clean_bed_title else None
-
-                if found_path:
-                    dst_name = format_output_filename(num_prefix, d_name, found_path, custom_name=custom_name)
-                    dst_file = os.path.join(target_container_dir, dst_name)
-                    shutil.copy2(found_path, dst_file)
-                    total_copied += 1
-
-        for fold in set(target_dest_dirs):
-            try:
-                if os.path.exists(fold):
-                    os.startfile(fold)
-            except Exception:
-                pass
+        missing = res.get("missing", [])
+        if missing:
+            names = ", ".join(missing_label(n) for _, _, n in missing)
+            InfoBar.error(
+                title="⚠️ Ne visi failai rasti!",
+                content=f"Užsakymas '{job_title}': nukopijuota {res.get('copied', 0)}, nerasta {len(missing)}: {names}",
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=-1,
+                parent=self
+            )
+            return
 
         if is_direct_hotfolder:
-            msg = f"Užsakymas '{job_title}' nukopijuotas tiesiai į HotFolderį ({total_copied} failų)."
+            msg = f"Užsakymas '{job_title}' nukopijuotas tiesiai į HotFolderį ({res.get('copied', 0)} failų)."
         else:
-            msg = f"Užsakymas '{job_title}' nukopijuotas į laikiną aplanką ({total_copied} failų)."
-
+            msg = f"Užsakymas '{job_title}' nukopijuotas į laikiną aplanką ({res.get('copied', 0)} failų)."
         InfoBar.success(
             title="Sėkmingai atkurta!",
             content=msg,
