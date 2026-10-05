@@ -12,3 +12,6 @@
 - Greitesnės miniatiūros: įsimenamos ir dideli failai dekoduojami sumažinti.
 - Naršyklės plėtinys (v1.1): pataisytas XSS, leidimai susiaurinti iki localhost (kitam adresui paprašoma leidimo), veikia ir mfgpodbase.com subdomenuose, greitesnis puslapio stebėjimas.
 - Paleisti_Programa.bat be BOM (pirma eilutė nebemeta klaidos).
+- Automatinis valymas trina tik programos sukurtus laikinus aplankus – jūsų aplankai „Konteineriai“ viduje nebeištrinami. (Iki šios versijos sukurtus aplankus vieną kartą ištrinkite rankiniu būdu.)
+- Du stalai tuo pačiu pavadinimu nebeištrina vienas kito aplanko (antras gauna _2).
+- Spaudos failų sąrašas atnaujinamas dažniau (kas 2 min. arba iškart, kai pagrindiniame aplanke atsiranda naujas failas).

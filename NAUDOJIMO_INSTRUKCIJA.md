@@ -124,7 +124,7 @@ Priklausomai nuo modelio nustatymų, generavimas veikia dviem būdais:
 ### 1. 📁 Laikinas aplankas (MacBook ir kt.)
 - Failai sukeliami į tvarkingą aplanką: `Desktop/Konteineriai/<StaloPavadinimas>`.
 - **Jokio dubliavimosi:** Nėra jokių `(1)`, `(2)` ar perteklinių laiko žymų. Pergeneravus – aplankas švariai atnaujinamas.
-- **10 min. auto-išvalymas:** Fone veikiantis laikmatis po 10 minučių automatiškai ir saugiai ištrina laikiną aplanką, kad darbalaukis neapsikrautų.
+- **10 min. auto-išvalymas:** Fone veikiantis laikmatis po 10 minučių (keičiama `config.json` → `auto_cleanup_minutes`) automatiškai ištrina programos sukurtą laikiną aplanką, kad darbalaukis neapsikrautų. Jūsų pačių sukurti aplankai neliečiami.
 
 ### 2. ⚡ Tiesiogiai į ColorGATE HotFolderį (iPad, Dėklai ir kt.)
 - Failai akimirksniu nukopijuojami tiesiai į ColorGATE RIP stebimą katalogą (pvz. `Productionserver25/HotDir/IPAD 10.9 2022`).

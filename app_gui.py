@@ -194,32 +194,57 @@ def get_cleanup_expiry_seconds():
     return max(1.0, minutes) * 60
 
 
-def perform_temp_folders_cleanup(tracked_dirs=None):
+TEMP_FOLDERS_FILE = os.path.join(BASE_DIR, "temp_folders.json")
+_temp_folders_lock = threading.Lock()
+
+
+def _load_temp_folders():
+    try:
+        with open(TEMP_FOLDERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def register_temp_folder(path):
+    """Įsimena programos sukurtą laikiną aplanką – valymas trina TIK tokius aplankus."""
+    with _temp_folders_lock:
+        data = _load_temp_folders()
+        data[os.path.normpath(path)] = time.time()
+        write_json_atomic(TEMP_FOLDERS_FILE, data, ensure_ascii=False, indent=2)
+
+
+def perform_temp_folders_cleanup():
+    """Ištrina programos sukurtus laikinus aplankus, senesnius nei auto_cleanup_minutes.
+    Vartotojo paties sukurti aplankai (net ir „Konteineriai“ viduje) neliečiami."""
     now = time.time()
     expiry = get_cleanup_expiry_seconds()
-    dirs_to_check = [DESKTOP_DIR]
-    if tracked_dirs:
-        for d in tracked_dirs:
-            if d and os.path.exists(d) and d not in dirs_to_check:
-                dirs_to_check.append(d)
-
-    for base in dirs_to_check:
-        if not os.path.exists(base):
-            continue
-        try:
-            for item_name in os.listdir(base):
-                item_path = os.path.join(base, item_name)
-                if os.path.isdir(item_path):
-                    try:
-                        mtime = os.path.getmtime(item_path)
-                        age = now - mtime
-                        if age >= expiry:
-                            shutil.rmtree(item_path, ignore_errors=True)
-                            print(f"[AutoCleanup] Ištrintas pasenęs laikinas aplankas (>{expiry / 60:.0f} min): {item_path}")
-                    except Exception as err:
-                        print(f"[AutoCleanup klaida]: {err}")
-        except Exception as e:
-            print(f"[AutoCleanup listing error]: {e}")
+    with _temp_folders_lock:
+        data = _load_temp_folders()
+        if not data:
+            return
+        keep = {}
+        for path, created in data.items():
+            if not os.path.isdir(path):
+                continue
+            try:
+                created = float(created)
+            except (TypeError, ValueError):
+                created = now
+            if now - created < expiry:
+                keep[path] = created
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            if os.path.isdir(path):
+                keep[path] = created  # dalis failų užrakinta – bandysime vėliau
+            else:
+                print(f"[AutoCleanup] Ištrintas laikinas aplankas (>{expiry / 60:.0f} min): {path}")
+        if keep != data:
+            try:
+                write_json_atomic(TEMP_FOLDERS_FILE, keep, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[AutoCleanup klaida]: {e}")
 
 # ----------------- MINIATIŪRŲ ATMINTIS -----------------
 # Perpiešiant stalą (sukeitimas, dubliavimas) miniatiūros nebeįkeliamos iš naujo.
@@ -473,7 +498,7 @@ def format_output_filename(num_prefix, design_name, source_filepath, custom_name
 # ----------------- KONTEINERIO GENERAVIMAS FONE (be užstrigimo) -----------------
 # Tinklo aplankų skenavimas gali užtrukti, todėl rezultatas trumpam įsimenamas.
 # Jei su įsimintu sąrašu kurio nors failo nerandama, sąrašas automatiškai perskenuojamas.
-SCAN_CACHE_TTL_SECONDS = 300
+SCAN_CACHE_TTL_SECONDS = 120
 _scan_cache = {}
 _scan_cache_lock = threading.Lock()
 
@@ -481,15 +506,27 @@ _scan_cache_lock = threading.Lock()
 def get_scanned_files(search_roots, force=False):
     """Grąžina (failų sąrašas, ar paimta iš atminties)."""
     key = tuple(os.path.normcase(os.path.normpath(r)) for r in search_roots)
+    roots_mtime = _roots_mtime(search_roots)
     if not force:
         with _scan_cache_lock:
             hit = _scan_cache.get(key)
-        if hit and time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS:
+        # Jei pagrindiniame aplanke atsirado / dingo failas, sąrašas nebeaktualus
+        if hit and time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS and hit[2] == roots_mtime:
             return hit[1], True
     files = scan_print_files_recursive(search_roots)
     with _scan_cache_lock:
-        _scan_cache[key] = (time.time(), files)
+        _scan_cache[key] = (time.time(), files, roots_mtime)
     return files, False
+
+
+def _roots_mtime(search_roots):
+    result = []
+    for r in search_roots:
+        try:
+            result.append(os.path.getmtime(r))
+        except OSError:
+            result.append(None)
+    return tuple(result)
 
 
 def unique_destination(dst):
@@ -589,8 +626,15 @@ def _run_container_job(plan, progress=None):
 
     total = len(matches)
     done = 0
+    used_titles = set()
     for b in plan["beds"]:
         title = safe_folder_name(b["title"], f"Stalas_{b['bed_idx'] + 1}")
+        # Du stalai tuo pačiu pavadinimu kitaip ištrintų vienas kito aplanką
+        base_title, n = title, 2
+        while title.lower() in used_titles:
+            title = f"{base_title}_{n}"
+            n += 1
+        used_titles.add(title.lower())
         if is_hot:
             target_dir = dest_dir
         else:
@@ -607,6 +651,10 @@ def _run_container_job(plan, progress=None):
             if os.path.exists(target_dir):
                 shutil.rmtree(target_dir, ignore_errors=True)
             os.makedirs(target_dir, exist_ok=True)
+            try:
+                register_temp_folder(target_dir)
+            except Exception as e:
+                print(f"[register_temp_folder klaida]: {e}")
         if target_dir not in result["folders"]:
             result["folders"].append(target_dir)
 

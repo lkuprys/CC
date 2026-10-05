@@ -11,6 +11,7 @@ dist/
 
 # Local cache & history
 history.json
+temp_folders.json
 *.log
 
 # Virtual Environments

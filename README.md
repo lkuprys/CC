@@ -91,9 +91,15 @@ Versijos numeris padidinamas automatiškai. Atnaujinimo žurnalas kompiuteryje: 
   "theme": "LIGHT",
   "auto_cleanup_minutes": 10,
   "github_repo": "lkuprys/CC",
-  "auto_check_updates": true
+  "auto_check_updates": true,
+  "reject_folder": "",
+  "api_host": "127.0.0.1"
 }
 ```
+
+- `auto_cleanup_minutes` – po kiek minučių ištrinami programos sukurti laikini aplankai. Trinami **tik** programos sukurti aplankai (jie įsimenami faile `temp_folders.json`), jūsų pačių aplankai neliečiami.
+- `api_host` – kur klauso naršyklės plėtinio serveris (5000 prievadas). Numatyta `127.0.0.1` – pasiekiamas tik iš to paties kompiuterio. Jei plėtinys siunčia iš **kito** kompiuterio, įrašykite `"0.0.0.0"` ir plėtinio nustatymuose nurodykite šio kompiuterio IP.
+- `reject_folder` – papildomas brokų aplankas paieškai.
 
 ---
 
