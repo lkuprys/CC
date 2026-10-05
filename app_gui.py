@@ -7,6 +7,8 @@ import time
 import math
 import copy
 import shutil
+import hashlib
+import tempfile
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -19,12 +21,12 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-from PySide6.QtCore import Qt, QThread, QThreadPool, QRunnable, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
+from PySide6.QtCore import Qt, QThread, QThreadPool, QRunnable, QLockFile, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
 from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QImage, QImageReader, QDrag, QCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFrame, QSizePolicy, QFileDialog, QSpacerItem, QTableWidgetItem,
-    QLabel, QSpinBox, QSplitter, QScrollArea, QStackedWidget, QHeaderView
+    QLabel, QSpinBox, QSplitter, QScrollArea, QStackedWidget, QHeaderView, QMessageBox
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QLocalServer, QLocalSocket
 
@@ -63,41 +65,45 @@ def _thumb_cache_get(url, dim):
     return _thumb_cache.get((url, dim))
 
 
-def _thumb_cache_put(url, dim, pix):
+def _thumb_cache_put(url, dim, pix, mtime=None):
     if len(_thumb_cache) >= _THUMB_CACHE_MAX:
         _thumb_cache.pop(next(iter(_thumb_cache)))
-    _thumb_cache[(url, dim)] = pix
+    _thumb_cache[(url, dim)] = (pix, mtime)
 
 
 class _ThumbnailLoader(QObject):
     """Vietinių (dažnai tinklo diske esančių) failų miniatiūros dekoduojamos fone."""
-    loaded = Signal(str, int, QImage)
+    loaded = Signal(str, int, QImage, float)   # kelias, dydis, vaizdas (tuščias = nepasikeitė / klaida), mtime
 
     def __init__(self):
         super().__init__()
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(2)
         self.pending = set()
-        self.loaded.connect(lambda url, dim, _img: self.pending.discard((url, dim)))
+        self.loaded.connect(lambda url, dim, _img, _mtime: self.pending.discard((url, dim)))
 
-    def request(self, path, dim):
+    def request(self, path, dim, known_mtime=None):
+        """known_mtime: jei failas nuo to laiko nepasikeitė, iš naujo nedekoduojama."""
         if (path, dim) in self.pending:
             return
         self.pending.add((path, dim))
-        self.pool.start(_LocalThumbTask(path, dim, self))
+        self.pool.start(_LocalThumbTask(path, dim, self, known_mtime))
 
 
 class _LocalThumbTask(QRunnable):
-    def __init__(self, path, dim, loader):
+    def __init__(self, path, dim, loader, known_mtime=None):
         super().__init__()
         self.path = path
         self.dim = dim
         self.loader = loader
+        self.known_mtime = known_mtime
 
     def run(self):
         img = QImage()
+        mtime = 0.0
         try:
-            if os.path.isfile(self.path):
+            mtime = os.path.getmtime(self.path) if os.path.isfile(self.path) else 0.0
+            if mtime and mtime != self.known_mtime:
                 reader = QImageReader(self.path)
                 reader.setAutoTransform(True)
                 size = reader.size()
@@ -109,7 +115,7 @@ class _LocalThumbTask(QRunnable):
                     img = img.scaled(self.dim, self.dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         except Exception as e:
             log.warning(f"Miniatiūros klaida {self.path}: {e}")
-        self.loader.loaded.emit(self.path, self.dim, img)
+        self.loader.loaded.emit(self.path, self.dim, img, mtime)
 
 
 _thumb_loader = None
@@ -421,10 +427,14 @@ class UVSlotWidget(ElevatedCardWidget):
 
         if self.design_url:
             cached = _thumb_cache_get(self.design_url, thumb_dim)
+            is_remote = self.design_url.lower().startswith(("http://", "https://", "data:"))
             if cached is not None:
-                self.thumb_label.setPixmap(cached)
+                self.thumb_label.setPixmap(cached[0])
                 self.thumb_label.setText("")
-            elif self.design_url.lower().startswith(("http://", "https://")):
+                if not is_remote:
+                    # Fone patikrinama, ar failas nebuvo perrašytas nauja versija
+                    thumbnail_loader().request(self.design_url, thumb_dim, known_mtime=cached[1])
+            elif is_remote:
                 self.load_thumbnail(self.design_url)
             else:
                 # Vietinis / tinklo kelias – įkeliama fone, langas neužstringa
@@ -433,11 +443,11 @@ class UVSlotWidget(ElevatedCardWidget):
             self.thumb_label.setText("🎨")
             self.thumb_label.setStyleSheet("font-size: 22px; color: #10b981;")
 
-    def _on_local_thumb_loaded(self, url, dim, img):
+    def _on_local_thumb_loaded(self, url, dim, img, mtime):
         if img.isNull():
             return
         pix = QPixmap.fromImage(img)
-        _thumb_cache_put(url, dim, pix)
+        _thumb_cache_put(url, dim, pix, mtime)
         thumb_dim = 95 if self.is_single_row else 75
         if self.is_occupied() and self.design_url == url and thumb_dim == dim:
             self.thumb_label.setPixmap(pix)
@@ -584,6 +594,11 @@ class ContainerStudioInterface(QWidget):
         self.current_bed_index = 0
         self.missing_items_by_bed = {}
         self.found_items_by_bed = {}      # {stalas: {vieta: (kelias, mtime)}}
+        self._prefetch_source = ""
+        self._prefetch_timer = QTimer(self)
+        self._prefetch_timer.setSingleShot(True)
+        self._prefetch_timer.setInterval(700)
+        self._prefetch_timer.timeout.connect(lambda: prefetch_scanned_files(self._prefetch_source))
         self.ambiguous_items_by_bed = {}  # {stalas: {vieta, ...}}
         self._job_worker = None
         self._job_context = None
@@ -844,7 +859,9 @@ class ContainerStudioInterface(QWidget):
         m_data = self.get_selected_model_data()
         if not m_data:
             return
-        prefetch_scanned_files(m_data.get("source", ""))
+        # Išankstinis skenavimas su delsa – vartant modelių sąrašą nepaleidžiama daug skenavimų
+        self._prefetch_source = m_data.get("source", "")
+        self._prefetch_timer.start()
 
         jig_id = m_data.get("jig_id", "jig_2x5")
         jig = next((j for j in self.jigs_data if j.get("id") == jig_id), None)
@@ -2273,8 +2290,8 @@ class ModelsSettingsInterface(QWidget):
     def open_log_file(self):
         if not os.path.exists(LOG_FILE):
             InfoBar.info(
-                title="Žurnalas tuščias",
-                content="Klaidų kol kas neužfiksuota.",
+                title="Žurnalo dar nėra",
+                content=f"Failas {LOG_FILE} nesukurtas (įrašų dar nebuvo arba programos aplankas neleidžia rašyti).",
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=3000,
                 parent=self.window()
@@ -2678,47 +2695,108 @@ class MainWindow(FluentWindow):
 
 # ----------------- TIK VIENAS PROGRAMOS LANGAS -----------------
 # Antras paleidimas tik iškelia jau atidarytą langą (kitaip jis liktų be plėtinio ryšio, nes 5000 prievadas užimtas).
-SINGLE_INSTANCE_KEY = "PodbaseContainerStudio_" + os.path.normcase(BASE_DIR).replace("\\", "_").replace(":", "")[-80:]
+# Raktas pagal programos aplanką (kelios skirtingose vietose įdiegtos kopijos netrukdo viena kitai);
+# tik raidės ir skaičiai – tinka ir užrakto failo, ir Windows named pipe pavadinimui
+SINGLE_INSTANCE_KEY = "PodbaseContainerStudio_" + hashlib.sha1(
+    os.path.normcase(os.path.abspath(BASE_DIR)).encode("utf-8")).hexdigest()[:16]
 
 
-def notify_running_instance():
-    """True, jei programa jau veikia (jai nusiųstas prašymas parodyti langą)."""
+def notify_running_instance(timeout_ms=1500):
+    """True, jei veikianti programa atsakė ir iškėlė savo langą."""
     sock = QLocalSocket()
     sock.connectToServer(SINGLE_INSTANCE_KEY)
     if not sock.waitForConnected(500):
         return False
     sock.write(b"show")
     sock.flush()
-    sock.waitForBytesWritten(500)
+    # Atsakymas įrodo, kad programa tikrai veikia (o ne tik dar neužsidarė)
+    answered = sock.waitForReadyRead(timeout_ms) and sock.readAll().data().startswith(b"ok")
     sock.disconnectFromServer()
-    return True
+    return answered
 
 
-def start_instance_server(window):
-    server = QLocalServer(window)
-    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)  # likęs po netikėto išjungimo
-    if not server.listen(SINGLE_INSTANCE_KEY):
-        log.warning(f"Nepavyko paleisti vieno lango apsaugos: {server.errorString()}")
-        return server
+def _bring_to_front(window):
+    if window.isMinimized():
+        window.setWindowState(window.windowState() & ~Qt.WindowMinimized)
+    window.show()
+    window.raise_()
+    window.activateWindow()
 
-    def on_new_connection():
-        conn = server.nextPendingConnection()
-        if conn is not None:
-            conn.disconnected.connect(conn.deleteLater)
-        window.showNormal()
-        window.raise_()
-        window.activateWindow()
 
-    server.newConnection.connect(on_new_connection)
-    return server
+class SingleInstanceGuard:
+    """
+    Užrakto failas užtikrina, kad programa veiktų tik vieną kartą, o vietinis serveris leidžia
+    antram paleidimui paprašyti iškelti jau atidarytą langą.
+    """
+
+    def __init__(self):
+        self.lock = QLockFile(os.path.join(tempfile.gettempdir(), SINGLE_INSTANCE_KEY + ".lock"))
+        # 0 = užraktas nelaikomas pasenusiu pagal laiką; tik jei jį laikęs procesas nebeveikia
+        self.lock.setStaleLockTime(0)
+        self.server = None
+        self.window = None
+        self._show_requested = False
+
+    def acquire(self):
+        """True – šis paleidimas yra vienintelis ir gali tęsti."""
+        if self.lock.tryLock(100):
+            return True
+        if notify_running_instance():
+            log.info("Programa jau atidaryta – iškeliamas esamas langas.")
+            return False
+        # Ankstesnis langas ką tik uždarytas, bet procesas dar baigiasi – palaukiame
+        if self.lock.tryLock(8000):
+            return True
+        log.warning("Programa jau veikia, bet neatsako.")
+        QMessageBox.warning(
+            None, "Podbase Container Studio",
+            "Programa jau paleista, bet neatsako.\n"
+            "Palaukite kelias sekundes arba uždarykite ją per Užduočių tvarkytuvę ir bandykite dar kartą."
+        )
+        return False
+
+    def start_server(self):
+        self.server = QLocalServer()
+        QLocalServer.removeServer(SINGLE_INSTANCE_KEY)  # likęs po netikėto išjungimo (užraktas jau mūsų)
+        if not self.server.listen(SINGLE_INSTANCE_KEY):
+            log.warning(f"Nepavyko paleisti vieno lango apsaugos serverio: {self.server.errorString()}")
+            return
+        self.server.newConnection.connect(self._on_new_connection)
+
+    def _on_new_connection(self):
+        conn = self.server.nextPendingConnection()
+        if conn is None:
+            return
+        conn.disconnected.connect(conn.deleteLater)
+        conn.write(b"ok")
+        conn.flush()
+        if self.window is not None:
+            _bring_to_front(self.window)
+        else:
+            self._show_requested = True  # langas dar kuriamas
+
+    def attach_window(self, window):
+        self.window = window
+        if self._show_requested:
+            _bring_to_front(window)
+
+    def release(self):
+        if self.server is not None:
+            self.server.close()
+        self.lock.unlock()
 
 
 if __name__ == "__main__":
     install_exception_logging()
     app = QApplication(sys.argv)
-    if notify_running_instance():
-        log.info("Programa jau atidaryta – iškeliamas esamas langas.")
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.acquire():
         sys.exit(0)
+    instance_guard.start_server()
+    # Uždarant langą iškart atlaisviname užraktą ir sustabdome fono darbus,
+    # kad naujas paleidimas nelauktų, kol senas procesas galutinai baigsis
+    app.aboutToQuit.connect(instance_guard.release)
+    app.aboutToQuit.connect(lambda: thumbnail_loader().pool.clear())
     log.info(f"Paleidžiama Podbase Container Studio v{CURRENT_VERSION}")
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
@@ -2728,6 +2806,6 @@ if __name__ == "__main__":
     else:
         setTheme(Theme.LIGHT)
     w = MainWindow()
-    w._instance_server = start_instance_server(w)
     w.show()
+    instance_guard.attach_window(w)
     sys.exit(app.exec())

@@ -81,3 +81,22 @@ def test_cache_rescans_when_file_appears(core, tmp_path, make_file):
     make_file(src / "deep" / "er" / "1002_a.png")
     res = core.run_container_job(plan(src, out, [("T", ["PID-1002"])]))
     assert res["copied"] == 1 and res["missing"] == []
+
+
+def test_forced_rescan_ignores_scan_started_before_request(core, tmp_path, make_file, now):
+    src = tmp_path / "src"
+    make_file(src / "1001_a.png")
+    roots = [str(src)]
+    key = tuple(os.path.normcase(os.path.normpath(r)) for r in roots)
+    # Kito skenavimo rezultatas: baigtas „ateityje“, bet pradėtas prieš užklausą – be naujo failo
+    core._scan_cache[key] = (now + 60, [], core._roots_mtime(roots), now - 5)
+    files, from_cache = core.get_scanned_files(roots, force=True)
+    assert [f["filename"] for f in files] == ["1001_a.png"] and from_cache is False
+
+
+def test_prefetch_does_not_wait_for_running_scan(core, tmp_path):
+    roots = [str(tmp_path)]
+    key = tuple(os.path.normcase(os.path.normpath(r)) for r in roots)
+    lock = core._scan_lock_for(key)
+    with lock:
+        assert core.get_scanned_files(roots, wait=False) == (None, False)

@@ -465,31 +465,43 @@ def _scan_lock_for(key):
         return _scan_key_locks.setdefault(key, threading.Lock())
 
 
-def get_scanned_files(search_roots, force=False):
-    """Grąžina (failų sąrašas, ar paimta iš atminties)."""
+def get_scanned_files(search_roots, force=False, wait=True):
+    """
+    Grąžina (failų sąrašas, ar paimta iš atminties).
+    wait=False: jei tie patys aplankai jau skenuojami, nelaukia ir grąžina (None, False).
+    """
     key = tuple(os.path.normcase(os.path.normpath(r)) for r in search_roots)
     requested_at = time.time()
+    lock = _scan_lock_for(key)
     # Tie patys aplankai skenuojami tik vieną kartą vienu metu (pvz., išankstinis skenavimas ir generavimas)
-    with _scan_lock_for(key):
+    if not lock.acquire(blocking=wait):
+        return None, False
+    try:
         roots_mtime = _roots_mtime(search_roots)
         with _scan_cache_lock:
             hit = _scan_cache.get(key)
         if hit and hit[2] == roots_mtime:
-            fresh = time.time() - hit[0] < SCAN_CACHE_TTL_SECONDS
-            # force: tinka tik sąrašas, nuskaitytas jau po šios užklausos (ką tik baigtas kitos gijos)
-            if (not force and fresh) or (force and hit[0] >= requested_at):
-                return hit[1], not force
+            scan_started = hit[3]
+            # force: tinka tik sąrašas, kurio skenavimas PRASIDĖJO po šios užklausos
+            if force:
+                if scan_started >= requested_at:
+                    return hit[1], False
+            elif time.time() - scan_started < SCAN_CACHE_TTL_SECONDS:
+                return hit[1], True
+        scan_started = time.time()
         files = scan_print_files_recursive(search_roots)
         with _scan_cache_lock:
-            _scan_cache[key] = (time.time(), files, roots_mtime)
+            _scan_cache[key] = (time.time(), files, roots_mtime, scan_started)
         return files, False
+    finally:
+        lock.release()
 
 
 def prefetch_scanned_files(source_dir):
     """Pradeda skenuoti modelio aplankus fone, kad paspaudus „Generuoti“ sąrašas jau būtų paruoštas."""
     def _run():
         try:
-            get_scanned_files(build_search_roots(source_dir))
+            get_scanned_files(build_search_roots(source_dir), wait=False)
         except Exception as e:
             log.warning(f"[išankstinis skenavimas]: {e}")
     threading.Thread(target=_run, name="prefetch-scan", daemon=True).start()
