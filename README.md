@@ -95,7 +95,9 @@ python -m pytest -q
 
 GitHub'e testai paleidžiami po kiekvieno pakeitimo (*Actions → Testai*) ir prieš kiekvieną išleidimą – jei testai nepraeina, nauja versija neišleidžiama.
 
-Kodo struktūra: `podbase_core.py` – logika be sąsajos, `api_server.py` – naršyklės plėtinio API, `app_gui.py` – sąsaja, `updater.py` – atnaujinimai.
+Kodo struktūra: `podbase_core.py` – logika be sąsajos, `api_server.py` – naršyklės plėtinio API, `app_gui.py` – sąsaja, `ui_kit.py` – išvaizda (Podbase WORK spalvos, šriftai, mygtukai, laukai, pranešimai), `updater.py` – atnaujinimai.
+
+Išvaizdos pavyzdžiai prieš ir po: `docs/dizainas/`. Šriftas Inter (OFL licencija, `fonts/`) įtraukiamas į programos paketą.
 
 ## 🩺 Klaidų žurnalas
 

@@ -25,8 +25,8 @@ jobs:
 
       - name: Sintaksė ir neapibrėžti vardai
         run: |
-          python -m py_compile app_gui.py podbase_core.py api_server.py updater.py package_release.py
-          pyflakes podbase_core.py api_server.py app_gui.py | grep -v "imported but unused\|missing placeholders" && exit 1 || true
+          python -m py_compile app_gui.py podbase_core.py api_server.py ui_kit.py updater.py package_release.py
+          pyflakes podbase_core.py api_server.py ui_kit.py app_gui.py updater.py | grep -v "imported but unused\|missing placeholders" && exit 1 || true
 
       - name: Testai
         run: python -m pytest -q

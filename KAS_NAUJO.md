@@ -6,3 +6,7 @@
 - Greitesnė failų paieška tinklo diske; pasirinkus modelį failai pradedami ieškoti iš anksto.
 - Miniatiūros įkeliamos fone – langas nebeužstringa.
 - Patikimesnė vieno lango apsauga ir miniatiūrų atnaujinimas, kai failas perrašomas nauja versija.
+- Naujas, ramesnis dizainas (Podbase WORK stilius): viršutinė juosta su skirtukais vietoj šoninio meniu, šviesios kortelės, ploni rėmeliai, Inter šriftas, vienas pagrindinis veiksmas kiekvienoje srityje.
+- Nerasti failai pažymimi raudonai be mirksėjimo; lizdai su keliais tinkamais failais – gintaro spalva.
+- Prieš valant stalą, trinant istoriją, modelį ar rėmą prašoma patvirtinimo.
+- Nustatymuose etiketės virš laukų, automatinių atnaujinimų jungiklis.

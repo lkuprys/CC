@@ -30,23 +30,20 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QLocalServer, QLocalSocket
 
-from qfluentwidgets import (
-    FluentWindow, NavigationItemPosition, NavigationWidget,
-    SubtitleLabel, TitleLabel, BodyLabel, CaptionLabel, StrongBodyLabel,
-    PrimaryPushButton, PushButton, ToolButton, TransparentToolButton,
-    ComboBox, EditableComboBox, LineEdit, SearchLineEdit, SpinBox,
-    CardWidget, SimpleCardWidget, ElevatedCardWidget, CheckBox,
-    InfoBar, InfoBarPosition, ProgressBar, ProgressRing,
-    FluentIcon as FIF, setTheme, Theme, isDarkTheme,
-    SmoothScrollArea, PillPushButton, TableWidget, SegmentedWidget,
-    RadioButton
+from ui_kit import (
+    SubtitleLabel, TitleLabel, BodyLabel, CaptionLabel, StrongBodyLabel, SecondaryLabel, FieldLabel, SectionLabel,
+    PrimaryPushButton, PushButton, SuccessPushButton, DangerPushButton, GhostPushButton, ToolButton,
+    TransparentToolButton, ComboBox, LineEdit, SearchLineEdit, SpinBox, CardWidget, CheckBox,
+    InfoBar, InfoBarPosition, ProgressBar, FIF, setTheme, Theme, isDarkTheme, SmoothScrollArea,
+    StatusBadge, TableWidget, SegmentedWidget, UnderlineTabs, Notice, MessageBoxBase, confirm, divider,
+    tokens, status_colors, tabular, theme_signals, apply_app_theme, icon as tinted_icon,
 )
 
 # Import auto-updater module
 from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_CHECK_INTERVAL_MS
 
 from podbase_core import (
-    BASE_DIR, DESKTOP_DIR, ICON_FILE, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
+    BASE_DIR, DESKTOP_DIR, ICON_FILE, get_res_path, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
     get_cleanup_expiry_seconds, prefetch_scanned_files,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
@@ -198,7 +195,7 @@ class ContainerJobWorker(QThread):
 
 
 # ----------------- RESPONSIVE UV SLOT CARD WITH FLUID DRAG & DROP & ANIMATION -----------------
-class UVSlotWidget(ElevatedCardWidget):
+class UVSlotWidget(QFrame):
     slot_cleared = Signal(int)
     slot_swapped = Signal(int, int)
     slot_duplicated = Signal(int)
@@ -207,6 +204,7 @@ class UVSlotWidget(ElevatedCardWidget):
 
     def __init__(self, row, col, parent=None, is_single_row=False):
         super().__init__(parent)
+        self.setObjectName("slot")
         self.grid_r = row
         self.grid_c = col
         self.item_idx = None
@@ -218,45 +216,50 @@ class UVSlotWidget(ElevatedCardWidget):
         self.net_mgr = QNetworkAccessManager(self)
         self.drag_start_pos = None
 
-        self.is_blinking = False
-        self.blink_state = False
-        self.blink_timer = QTimer(self)
-        self.blink_timer.setInterval(400)
-        self.blink_timer.timeout.connect(self._on_blink_step)
+        # Paskutinio generavimo žyma: None, "error" (failas nerastas) arba "warning" (keli kandidatai)
+        self.mark = None
+        self.is_blinking = False   # suderinamumui: True, kai lizdas pažymėtas kaip nerastas
+        self.drag_over = False
 
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAttribute(Qt.WA_Hover, True)
 
         if self.is_single_row:
             self.setMinimumHeight(180)
             self.setMaximumHeight(320)
         else:
-            self.setMinimumHeight(90)
+            self.setMinimumHeight(96)
 
         self.init_ui()
+        theme_signals.changed.connect(self.refresh_style)
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(2)
-        self.badge = QLabel("--", self)
+        self.badge = QLabel("", self)
         self.badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.badge.setFixedHeight(20)
+        tabular(self.badge)
         top_bar.addWidget(self.badge)
         top_bar.addStretch(1)
 
         self.btn_dup = TransparentToolButton(FIF.ADD, self)
-        self.btn_dup.setFixedSize(20, 20)
+        self.btn_dup.setFixedSize(26, 26)
+        self.btn_dup.setIconSize(QSize(14, 14))
         self.btn_dup.setToolTip("Dublikuoti")
         self.btn_dup.clicked.connect(self.on_dup_clicked)
         self.btn_dup.hide()
         top_bar.addWidget(self.btn_dup)
 
         self.btn_clear = TransparentToolButton(FIF.DELETE, self)
-        self.btn_clear.setFixedSize(20, 20)
-        self.btn_clear.setToolTip("Išvalyti")
+        self.btn_clear.setFixedSize(26, 26)
+        self.btn_clear.setIconSize(QSize(14, 14))
+        self.btn_clear.setToolTip("Išimti iš lizdo")
         self.btn_clear.clicked.connect(self.on_clear_clicked)
         self.btn_clear.hide()
         top_bar.addWidget(self.btn_clear)
@@ -264,12 +267,11 @@ class UVSlotWidget(ElevatedCardWidget):
 
         self.thumb_label = QLabel(self)
         self.thumb_label.setAlignment(Qt.AlignCenter)
-        self.thumb_label.setStyleSheet("border-radius: 4px; background: transparent;")
         self.thumb_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.thumb_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.thumb_label, 1)
 
-        self.title_label = CaptionLabel("Laisvas", self)
+        self.title_label = QLabel("Laisvas", self)
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.title_label)
@@ -277,61 +279,17 @@ class UVSlotWidget(ElevatedCardWidget):
         self.set_empty()
 
     def start_blinking(self):
-        self.is_blinking = True
-        self.blink_state = True
-        self._apply_blink_style(True)
-        if not self.blink_timer.isActive():
-            self.blink_timer.start()
+        """Lizdo failas nerastas – raudona žyma (be animacijos)."""
+        self.set_mark("error")
 
     def stop_blinking(self):
-        self.is_blinking = False
-        if self.blink_timer.isActive():
-            self.blink_timer.stop()
+        if self.mark == "error":
+            self.set_mark(None)
+
+    def set_mark(self, mark):
+        self.mark = mark
+        self.is_blinking = (mark == "error")
         self.refresh_style()
-
-    def _on_blink_step(self):
-        if not self.is_blinking:
-            self.blink_timer.stop()
-            return
-        self.blink_state = not self.blink_state
-        self._apply_blink_style(self.blink_state)
-
-    def _apply_blink_style(self, highlight_on):
-        dark = isDarkTheme()
-        if highlight_on:
-            self.badge.setStyleSheet("""
-                background: #ef4444;
-                color: #ffffff;
-                font-weight: 900;
-                font-size: 11px;
-                padding: 1px 6px;
-                border-radius: 4px;
-            """)
-            self.title_label.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 11px;")
-            self.setStyleSheet(f"""
-                UVSlotWidget {{
-                    border: 3px solid #ef4444;
-                    border-radius: 8px;
-                    background: {'#450a0a' if dark else '#fee2e2'};
-                }}
-            """)
-        else:
-            self.badge.setStyleSheet(f"""
-                background: {'#991b1b' if dark else '#fca5a5'};
-                color: #ffffff;
-                font-weight: 800;
-                font-size: 11px;
-                padding: 1px 6px;
-                border-radius: 4px;
-            """)
-            self.title_label.setStyleSheet(f"color: {'#f87171' if dark else '#dc2626'}; font-size: 11px;")
-            self.setStyleSheet(f"""
-                UVSlotWidget {{
-                    border: 2px dashed #ef4444;
-                    border-radius: 8px;
-                    background: {'#1e293b' if dark else '#ffffff'};
-                }}
-            """)
 
     def on_dup_clicked(self):
         self.stop_blinking()
@@ -344,50 +302,47 @@ class UVSlotWidget(ElevatedCardWidget):
             self.slot_cleared.emit(self.item_idx)
 
     def refresh_style(self):
-        if self.is_blinking:
-            self._apply_blink_style(self.blink_state)
-            return
-
-        dark = isDarkTheme()
-        if self.is_occupied():
-            self.badge.setStyleSheet("""
-                background: linear-gradient(135deg, #10b981, #059669);
-                color: #ffffff;
-                font-weight: 800;
-                font-size: 11px;
-                padding: 1px 6px;
-                border-radius: 4px;
-            """)
-            self.title_label.setStyleSheet(f"color: {'#f1f5f9' if dark else '#0f172a'}; font-weight: bold; font-size: 11px;")
-            self.setStyleSheet(f"""
-                UVSlotWidget {{
-                    border: 2px solid #10b981;
-                    border-radius: 8px;
-                    background: {'#1e293b' if dark else '#ffffff'};
-                }}
-            """)
+        t = tokens()
+        occupied = self.is_occupied()
+        if self.drag_over:
+            fg, bg, _ = status_colors("info")
+            border, border_style, hover_border = fg, "solid", fg
+        elif occupied and self.mark in ("error", "warning"):
+            fg, bg, _ = status_colors(self.mark)
+            border, border_style, hover_border = fg, "solid", fg
+        elif occupied:
+            fg, bg = t["text"], t["card"]
+            border, border_style, hover_border = t["border"], "solid", t["strong"]
         else:
-            self.badge.setStyleSheet(f"""
-                background: {'#334155' if dark else '#e2e8f0'};
-                color: {'#94a3b8' if dark else '#64748b'};
-                font-weight: 800;
-                font-size: 11px;
-                padding: 1px 6px;
-                border-radius: 4px;
-            """)
-            self.thumb_label.setStyleSheet(f"font-size: 24px; color: {'#475569' if dark else '#cbd5e1'}; font-weight: 300;")
-            self.title_label.setStyleSheet(f"color: {'#64748b' if dark else '#94a3b8'}; font-size: 11px;")
-            self.setStyleSheet(f"""
-                UVSlotWidget {{
-                    border: 1.5px dashed {'#475569' if dark else '#cbd5e1'};
-                    border-radius: 8px;
-                    background: {'#0f172a' if dark else '#f8fafc'};
-                }}
-                UVSlotWidget:hover {{
-                    border-color: #10b981;
-                    background: {'#1e293b' if dark else '#f1f5f9'};
-                }}
-            """)
+            fg, bg = t["muted"], t["page"]
+            border, border_style, hover_border = t["strong"], "dashed", t["muted"]
+
+        self.setStyleSheet(f"""
+            QFrame#slot {{ background: {bg}; border: 1px {border_style} {border}; border-radius: 12px; }}
+            QFrame#slot:hover {{ border-color: {hover_border}; }}
+        """)
+
+        num = self.badge.property("num") or ""
+        if occupied and self.mark in ("error", "warning"):
+            m_fg, _m_bg, _ = status_colors(self.mark)
+            suffix = "Nerasta" if self.mark == "error" else "Keli failai"
+            self.badge.setText(f"{num} · {suffix}")
+            self.badge.setStyleSheet(
+                f"background: {t['card']}; color: {m_fg}; border-radius: 10px; padding: 0 8px; "
+                f"font-size: 11px; font-weight: 600;")
+            self.title_label.setStyleSheet(f"color: {m_fg}; font-size: 12px; font-weight: 600;")
+        elif occupied:
+            self.badge.setText(num)
+            self.badge.setStyleSheet(
+                f"background: {t['fill']}; color: {t['secondary']}; border-radius: 10px; padding: 0 8px; "
+                f"font-size: 11px; font-weight: 600;")
+            self.title_label.setStyleSheet(f"color: {t['text']}; font-size: 12px; font-weight: 600;")
+        else:
+            self.badge.setText(num)
+            self.badge.setStyleSheet(
+                f"background: transparent; color: {t['muted']}; padding: 0 2px; font-size: 11px; font-weight: 500;")
+            self.title_label.setStyleSheet(f"color: {t['muted']}; font-size: 12px;")
+            self.thumb_label.setStyleSheet(f"color: {t['disabled']}; font-size: 22px; font-weight: 400;")
 
     def set_file_info(self, path=None, mtime=0, ambiguous=False):
         """Užvedus pelę parodo, kuris spaudos failas buvo paimtas paskutinio generavimo metu."""
@@ -397,11 +352,13 @@ class UVSlotWidget(ElevatedCardWidget):
         when = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime else "?"
         tip = f"Failas: {os.path.basename(path)}\nAplankas: {os.path.dirname(path)}\nData: {when}"
         if ambiguous:
-            tip = "⚠️ Rasti keli tinkami failai – paimtas naujausias.\n" + tip
+            tip = "Rasti keli tinkami failai – paimtas naujausias.\n" + tip
+            self.set_mark("warning")
         self.setToolTip(tip)
 
     def set_data(self, name, url="", item_idx=None):
-        self.stop_blinking()
+        self.mark = None
+        self.is_blinking = False
         self.setToolTip("")
         if self.current_reply:
             try:
@@ -417,8 +374,7 @@ class UVSlotWidget(ElevatedCardWidget):
         self.btn_dup.show()
         self.btn_clear.show()
         self.title_label.setText(self.design_name)
-        if item_idx is not None:
-            self.badge.setText(f"{item_idx + 1:02d}")
+        self.badge.setProperty("num", f"{item_idx + 1:02d}" if item_idx is not None else "")
         self.refresh_style()
 
         thumb_dim = 95 if self.is_single_row else 75
@@ -440,8 +396,7 @@ class UVSlotWidget(ElevatedCardWidget):
                 # Vietinis / tinklo kelias – įkeliama fone, langas neužstringa
                 thumbnail_loader().request(self.design_url, thumb_dim)
         else:
-            self.thumb_label.setText("🎨")
-            self.thumb_label.setStyleSheet("font-size: 22px; color: #10b981;")
+            self.thumb_label.setPixmap(tinted_icon(FIF.PHOTO, tokens()["muted"]).pixmap(28, 28))
 
     def _on_local_thumb_loaded(self, url, dim, img, mtime):
         if img.isNull():
@@ -454,7 +409,8 @@ class UVSlotWidget(ElevatedCardWidget):
             self.thumb_label.setText("")
 
     def set_empty(self, placeholder_num=None):
-        self.stop_blinking()
+        self.mark = None
+        self.is_blinking = False
         self.setToolTip("")
         if self.current_reply:
             try:
@@ -473,10 +429,7 @@ class UVSlotWidget(ElevatedCardWidget):
         self.thumb_label.setPixmap(QPixmap())
         self.thumb_label.setText("+")
         self.title_label.setText("Laisvas")
-        if placeholder_num is not None:
-            self.badge.setText(f"{placeholder_num:02d}")
-        else:
-            self.badge.setText("--")
+        self.badge.setProperty("num", f"{placeholder_num:02d}" if placeholder_num is not None else "")
         self.refresh_style()
 
     def is_occupied(self):
@@ -548,14 +501,15 @@ class UVSlotWidget(ElevatedCardWidget):
     def dragEnterEvent(self, event):
         if event.mimeData().hasText() or event.mimeData().hasUrls() or event.mimeData().hasHtml() or event.mimeData().hasImage():
             event.acceptProposedAction()
-            dark = isDarkTheme()
-            self.setStyleSheet(f"UVSlotWidget {{ border: 2.5px solid #3b82f6; background: {'#1e3a8a' if dark else '#eff6ff'}; border-radius: 8px; }}")
+            self.drag_over = True
+            self.refresh_style()
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasText() or event.mimeData().hasUrls() or event.mimeData().hasHtml() or event.mimeData().hasImage():
             event.acceptProposedAction()
 
     def dragLeaveEvent(self, event):
+        self.drag_over = False
         self.refresh_style()
 
     def dropEvent(self, event):
@@ -575,6 +529,7 @@ class UVSlotWidget(ElevatedCardWidget):
             if items:
                 self.external_items_dropped.emit(self.item_idx if self.item_idx is not None else -1, items)
                 event.acceptProposedAction()
+        self.drag_over = False
         self.refresh_style()
 
 
@@ -613,183 +568,142 @@ class ContainerStudioInterface(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 8, 12, 8)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(16)
 
-        # 1. Unified Compact Control Card (Single Row)
+        # 1. Užsakymo kortelė: laukai viršuje, stalo valdymas apačioje
         top_card = CardWidget(self)
-        top_layout = QHBoxLayout(top_card)
-        top_layout.setContentsMargins(12, 6, 12, 6)
-        top_layout.setSpacing(8)
+        top_v = QVBoxLayout(top_card)
+        top_v.setContentsMargins(20, 16, 20, 12)
+        top_v.setSpacing(12)
 
-        if os.path.exists(ICON_FILE):
-            self.lbl_brand_icon = QLabel(self)
-            pix = QPixmap(ICON_FILE).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.lbl_brand_icon.setPixmap(pix)
-            top_layout.addWidget(self.lbl_brand_icon)
+        fields = QHBoxLayout()
+        fields.setSpacing(16)
 
-        title_brand = StrongBodyLabel("Podbase", self)
-        title_brand.setStyleSheet("font-weight: 900; font-size: 15px; color: #10b981;")
-        top_layout.addWidget(title_brand)
+        def field(label_text, widget, stretch=0):
+            box = QVBoxLayout()
+            box.setSpacing(6)
+            box.addWidget(FieldLabel(label_text, self))
+            box.addWidget(widget)
+            fields.addLayout(box, stretch)
 
-        sep0 = QFrame(self)
-        sep0.setFrameShape(QFrame.VLine)
-        sep0.setStyleSheet("color: #cbd5e1;")
-        top_layout.addWidget(sep0)
-
-        # Container / Job Name
-        top_layout.addWidget(StrongBodyLabel("Konteinerio Pavadinimas:", self))
         self.job_edit = LineEdit(self)
         self.job_edit.setPlaceholderText("pvz. BID-6363")
-        self.job_edit.setFixedHeight(30)
-        self.job_edit.setMinimumWidth(160)
+        self.job_edit.setMinimumWidth(200)
         self.job_edit.textChanged.connect(self.on_job_name_changed)
-        top_layout.addWidget(self.job_edit, 1)
+        field("Konteinerio pavadinimas", self.job_edit, 3)
 
-        # Model Selector
-        top_layout.addWidget(StrongBodyLabel("Modelis:", self))
         self.model_combo = ComboBox(self)
-        self.model_combo.setFixedHeight(30)
         self.model_combo.setMinimumWidth(220)
         self.populate_models_combo()
         self.model_combo.currentIndexChanged.connect(self.on_model_changed)
-        top_layout.addWidget(self.model_combo, 1)
+        field("Modelis", self.model_combo, 3)
 
-        # Server Pill
-        self.status_pill = PillPushButton("🟢 Port 5000", self)
-        self.status_pill.setEnabled(False)
-        self.status_pill.setFixedHeight(26)
-        top_layout.addWidget(self.status_pill)
+        self.lbl_jig_name = SecondaryLabel("—", self)
+        self.lbl_jig_name.setFixedHeight(40)
+        tabular(self.lbl_jig_name)
+        field("Rėmas", self.lbl_jig_name, 1)
 
-        main_layout.addWidget(top_card)
+        mode_wrap = QWidget(self)
+        mode_l = QHBoxLayout(mode_wrap)
+        mode_l.setContentsMargins(0, 0, 0, 0)
+        self.lbl_mode_badge = StatusBadge("", "neutral", mode_wrap)
+        mode_l.addWidget(self.lbl_mode_badge)
+        mode_l.addStretch(1)
+        mode_wrap.setFixedHeight(40)
+        field("Išvestis", mode_wrap, 1)
 
-        # 2. Compact Bed Navigation & Actions Bar
-        bed_nav_card = SimpleCardWidget(self)
-        bed_nav_layout = QHBoxLayout(bed_nav_card)
-        bed_nav_layout.setContentsMargins(10, 4, 10, 4)
+        top_v.addLayout(fields)
+        top_v.addWidget(divider(self))
+
+        bed_nav_layout = QHBoxLayout()
         bed_nav_layout.setSpacing(8)
 
-        self.lbl_jig_name = StrongBodyLabel("📐 Rėmas: Nėra", self)
-        self.lbl_jig_name.setStyleSheet("font-size: 12px;")
-        bed_nav_layout.addWidget(self.lbl_jig_name)
-
-        sep = QFrame(self)
-        sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #cbd5e1;")
-        bed_nav_layout.addWidget(sep)
-
         self.btn_prev_bed = ToolButton(FIF.LEFT_ARROW, self)
-        self.btn_prev_bed.setFixedSize(26, 26)
+        self.btn_prev_bed.setFixedSize(32, 32)
         self.btn_prev_bed.setToolTip("Ankstesnis stalas")
         self.btn_prev_bed.clicked.connect(self.prev_bed)
         bed_nav_layout.addWidget(self.btn_prev_bed)
 
-        self.lbl_bed_page = StrongBodyLabel("Stalas 1 / 1", self)
-        self.lbl_bed_page.setStyleSheet("font-size: 12px; color: #10b981; font-weight: 800; padding: 0 4px;")
+        self.lbl_bed_page = StrongBodyLabel("Stalas 1 iš 1", self)
+        tabular(self.lbl_bed_page)
+        self.lbl_bed_page.setMinimumWidth(96)
+        self.lbl_bed_page.setAlignment(Qt.AlignCenter)
         bed_nav_layout.addWidget(self.lbl_bed_page)
 
         self.btn_next_bed = ToolButton(FIF.RIGHT_ARROW, self)
-        self.btn_next_bed.setFixedSize(26, 26)
+        self.btn_next_bed.setFixedSize(32, 32)
         self.btn_next_bed.setToolTip("Kitas stalas")
         self.btn_next_bed.clicked.connect(self.next_bed)
         bed_nav_layout.addWidget(self.btn_next_bed)
 
-        self.btn_add_bed = PushButton(FIF.ADD, "Naujas Stalas", self)
-        self.btn_add_bed.setFixedHeight(26)
+        self.btn_add_bed = PushButton(FIF.ADD, "Naujas stalas", self)
+        self.btn_add_bed.setFixedHeight(32)
         self.btn_add_bed.clicked.connect(self.add_new_bed)
         bed_nav_layout.addWidget(self.btn_add_bed)
 
+        bed_nav_layout.addSpacing(16)
         self.capacity_bar = ProgressBar(self)
-        self.capacity_bar.setFixedWidth(110)
-        self.capacity_bar.setFixedHeight(12)
+        self.capacity_bar.setFixedWidth(120)
         bed_nav_layout.addWidget(self.capacity_bar)
 
-        self.lbl_capacity_text = CaptionLabel("0/0 lizdų (0%)", self)
-        self.lbl_capacity_text.setStyleSheet("font-weight: bold; color: #10b981; font-size: 11px;")
+        self.lbl_capacity_text = SecondaryLabel("0 / 0", self)
+        tabular(self.lbl_capacity_text)
         bed_nav_layout.addWidget(self.lbl_capacity_text)
 
         bed_nav_layout.addStretch(1)
 
-        self.lbl_mode_badge = QLabel("⚡ Tiesioginis HotFolderis", self)
-        self.lbl_mode_badge.setStyleSheet("""
-            background: #dbeafe;
-            color: #1e40af;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 700;
-        """)
-        bed_nav_layout.addWidget(self.lbl_mode_badge)
-
         self.btn_add_slot = PushButton(FIF.ADD, "Pridėti", self)
-        self.btn_add_slot.setFixedHeight(26)
+        self.btn_add_slot.setFixedHeight(32)
         self.btn_add_slot.clicked.connect(self.add_manual_design)
         bed_nav_layout.addWidget(self.btn_add_slot)
 
-        self.btn_reverse = PushButton(FIF.SYNC, "Apversti", self)
-        self.btn_reverse.setFixedHeight(26)
+        self.btn_reverse = PushButton(FIF.SYNC, "Apversti tvarką", self)
+        self.btn_reverse.setFixedHeight(32)
         self.btn_reverse.clicked.connect(self.reverse_slots_order)
         bed_nav_layout.addWidget(self.btn_reverse)
 
-        self.btn_clear_all = PushButton(FIF.DELETE, "Išvalyti", self)
-        self.btn_clear_all.setFixedHeight(26)
+        self.btn_clear_all = DangerPushButton(FIF.DELETE, "Išvalyti stalą", self)
+        self.btn_clear_all.setFixedHeight(32)
         self.btn_clear_all.clicked.connect(self.clear_current_bed)
         bed_nav_layout.addWidget(self.btn_clear_all)
 
-        main_layout.addWidget(bed_nav_card)
+        top_v.addLayout(bed_nav_layout)
+        main_layout.addWidget(top_card)
 
-        # 3. UV Printer Bed Grid Area (Full Screen Responsive Fill)
+        # 2. Stalo tinklelis
         self.grid_widget = CardWidget(self)
         self.grid_widget.setObjectName("uvTableBedGrid")
         self.grid_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.grid_widget.setAcceptDrops(True)
-        self.update_bed_container_style()
 
         self.table_grid_layout = QGridLayout(self.grid_widget)
-        self.table_grid_layout.setContentsMargins(10, 10, 10, 10)
+        self.table_grid_layout.setContentsMargins(16, 16, 16, 16)
         self.table_grid_layout.setSpacing(8)
 
         main_layout.addWidget(self.grid_widget, 1)
 
-        # 4. Compact Bottom Action Bar
-        bottom_card = ElevatedCardWidget(self)
-        bottom_card.setFixedHeight(52)
-        bot_layout = QHBoxLayout(bottom_card)
-        bot_layout.setContentsMargins(14, 6, 14, 6)
+        # 3. Veiksmų juosta: vienas pagrindinis veiksmas
+        bot_layout = QHBoxLayout()
+        bot_layout.setContentsMargins(0, 0, 0, 0)
+        bot_layout.setSpacing(12)
 
-        self.btn_open_folder = PushButton(FIF.FOLDER, "📁 Atidaryti aplanką", self)
-        self.btn_open_folder.setFixedHeight(36)
+        self.btn_open_folder = PushButton(FIF.FOLDER, "Atidaryti aplanką", self)
+        self.btn_open_folder.setFixedHeight(48)
         self.btn_open_folder.clicked.connect(self.open_current_output_folder)
         bot_layout.addWidget(self.btn_open_folder)
 
-        bot_layout.addStretch(1)
+        self.lbl_generate_hint = SecondaryLabel("", self)
+        bot_layout.addWidget(self.lbl_generate_hint, 1, Qt.AlignRight | Qt.AlignVCenter)
 
-        self.btn_generate = PushButton(self)
-        self.btn_generate.setText("🚀  SUKURTI KONTEINERĮ")
-        self.btn_generate.setFixedHeight(38)
-        self.btn_generate.setCursor(Qt.PointingHandCursor)
-        self.btn_generate.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669);
-                color: #ffffff;
-                border: none;
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: 800;
-                padding: 0 30px;
-                letter-spacing: 0.5px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #047857);
-            }
-            QPushButton:pressed {
-                background: #047857;
-            }
-        """)
+        self.btn_generate = PrimaryPushButton("Sukurti konteinerį", self)
+        self.btn_generate.setFixedHeight(48)
+        self.btn_generate.setMinimumWidth(260)
+        self.btn_generate.setStyleSheet("font-size: 15px; font-weight: 600;")
         self.btn_generate.clicked.connect(self.generate_container)
         bot_layout.addWidget(self.btn_generate)
 
-        main_layout.addWidget(bottom_card)
+        main_layout.addLayout(bot_layout)
 
         self.on_model_changed()
 
@@ -829,14 +743,6 @@ class ContainerStudioInterface(QWidget):
             event.acceptProposedAction()
 
     def update_bed_container_style(self):
-        dark = isDarkTheme()
-        self.grid_widget.setStyleSheet(f"""
-            CardWidget#uvTableBedGrid {{
-                background: {'#0f172a' if dark else '#f1f5f9'};
-                border: 2px solid {'#334155' if dark else '#cbd5e1'};
-                border-radius: 8px;
-            }}
-        """)
         for row in self.grid_slots:
             for s in row:
                 s.refresh_style()
@@ -869,35 +775,8 @@ class ContainerStudioInterface(QWidget):
             jig = self.jigs_data[0] if self.jigs_data else {"rows": 2, "cols": 5, "name": "Standartinis 2x5"}
 
         self.active_jig = jig
-        self.lbl_jig_name.setText(f"📐 Rėmas: <b>{jig.get('name', 'Standartinis')}</b> ({jig.get('rows', 2)}x{jig.get('cols', 5)})")
-        
-        output_mode = m_data.get("output_mode", "temp_folder")
-        dark = isDarkTheme()
-
-        if output_mode == "direct_hotfolder":
-            self.btn_generate.setText("🚀  SIŲSTI TIESIAI Į HOTFOLDERĮ")
-            self.btn_open_folder.setText("📁 Atidaryti HotFolderį")
-            self.lbl_mode_badge.setText("⚡ Tiesioginis HotFolderis")
-            self.lbl_mode_badge.setStyleSheet(f"""
-                background: {'#1e3a8a' if dark else '#dbeafe'};
-                color: {'#93c5fd' if dark else '#1e40af'};
-                padding: 3px 8px;
-                border-radius: 4px;
-                font-size: 11px;
-                font-weight: 700;
-            """)
-        else:
-            self.btn_generate.setText("🚀  SUKURTI KONTEINERĮ (10 min. laikinas)")
-            self.btn_open_folder.setText("📁 Atidaryti aplanką")
-            self.lbl_mode_badge.setText("⏳ 10 min. Laikinas aplankas")
-            self.lbl_mode_badge.setStyleSheet(f"""
-                background: {'#374151' if dark else '#f1f5f9'};
-                color: {'#9ca3af' if dark else '#475569'};
-                padding: 3px 8px;
-                border-radius: 4px;
-                font-size: 11px;
-                font-weight: 700;
-            """)
+        self.lbl_jig_name.setText(f"{jig.get('name', 'Standartinis')} · {jig.get('rows', 2)} × {jig.get('cols', 5)}")
+        self._apply_output_mode(m_data.get("output_mode", "temp_folder"))
 
         self.build_grid_layout()
         self.render_current_bed()
@@ -1038,7 +917,7 @@ class ContainerStudioInterface(QWidget):
         pct = int((occupied / capacity) * 100) if capacity > 0 else 0
 
         self.capacity_bar.setValue(pct)
-        self.lbl_capacity_text.setText(f"{occupied}/{capacity} ({pct}%)")
+        self.lbl_capacity_text.setText(f"{occupied} / {capacity}")
 
     def prev_bed(self):
         self.save_current_bed_state()
@@ -1065,7 +944,7 @@ class ContainerStudioInterface(QWidget):
         self.render_current_bed()
         InfoBar.success(
             title="Pridėtas naujas stalas",
-            content=f"Sukurtas papildomas stalas #{self.current_bed_index + 1} ({new_name})!",
+            content=f"Stalas {self.current_bed_index + 1}: {new_name}",
             orient=Qt.Horizontal,
             position=InfoBarPosition.TOP_RIGHT,
             duration=3000,
@@ -1105,7 +984,7 @@ class ContainerStudioInterface(QWidget):
                     self.render_current_bed()
                     InfoBar.success(
                         title="Dizainas dublikuotas",
-                        content=f"Dizainas sėkmingai pridėtas į stalo sąrašą!",
+                        content="Kopija pridėta į stalą.",
                         position=InfoBarPosition.TOP_RIGHT,
                         duration=2500,
                         parent=self
@@ -1123,7 +1002,7 @@ class ContainerStudioInterface(QWidget):
                     self.render_current_bed()
                     InfoBar.info(
                         title="Rėmas buvo pilnas",
-                        content=f"Dublikuota į naują stalą #{self.current_bed_index + 1}!",
+                        content=f"Kopija pridėta į stalą {self.current_bed_index + 1}.",
                         position=InfoBarPosition.TOP_RIGHT,
                         duration=3000,
                         parent=self
@@ -1140,7 +1019,7 @@ class ContainerStudioInterface(QWidget):
             self.render_current_bed()
             InfoBar.success(
                 title="Dizainas pakeistas",
-                content=f"Lizdas #{target_idx + 1} sėkmingai pakeistas nauju dizainu!",
+                content=f"Lizdas {target_idx + 1} pakeistas nauju dizainu.",
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=2500,
                 parent=self
@@ -1173,7 +1052,7 @@ class ContainerStudioInterface(QWidget):
         self.render_current_bed()
         InfoBar.success(
             title="Dizainai įkelti",
-            content=f"Sėkmingai įkelta {len(items)} vnt. dizainų!",
+            content=f"Įkelta {len(items)} vnt.",
             position=InfoBarPosition.TOP_RIGHT,
             duration=3000,
             parent=self
@@ -1193,6 +1072,11 @@ class ContainerStudioInterface(QWidget):
             self.render_current_bed()
 
     def clear_current_bed(self):
+        if self.beds[self.current_bed_index] and not confirm(
+                self, "Išvalyti stalą?",
+                f"Iš stalo {self.current_bed_index + 1} bus išimti visi dizainai. Spaudos failai neliečiami.",
+                "Išvalyti"):
+            return
         self._clear_job_marks()
         self.beds[self.current_bed_index] = []
         self.render_current_bed()
@@ -1243,7 +1127,7 @@ class ContainerStudioInterface(QWidget):
             self.render_current_bed()
             InfoBar.info(
                 title="Pridėta prie esamo užsakymo",
-                content=f"Pridėta {len(designs)} naujų dizainų! Iš viso stalų: {len(self.beds)}.",
+                content=f"Pridėta {len(designs)} vnt. Iš viso stalų: {len(self.beds)}.",
                 orient=Qt.Horizontal,
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=3500,
@@ -1273,12 +1157,12 @@ class ContainerStudioInterface(QWidget):
             self.current_bed_index = 0
             self.render_current_bed()
 
-            msg = f"Įkelta {len(designs)} dizainų užsakymui {job_name or ''}!"
+            msg = f"{job_name or 'Užsakymas'}: {len(designs)} vnt."
             if len(self.beds) > 1:
                 msg += f" ({len(self.beds)} stalai)."
 
             InfoBar.success(
-                title="Gauti duomenys iš naršyklės",
+                title="Užsakymas gautas iš naršyklės",
                 content=msg,
                 orient=Qt.Horizontal,
                 position=InfoBarPosition.TOP_RIGHT,
@@ -1313,7 +1197,7 @@ class ContainerStudioInterface(QWidget):
 
         InfoBar.success(
             title="Istorijos užsakymas įkeltas",
-            content=f"Užsakymas '{job_name}' sėkmingai atkurtas redagavimui ir pergeneravimui!",
+            content=f"Užsakymas „{job_name}“ paruoštas redaguoti.",
             position=InfoBarPosition.TOP_RIGHT,
             duration=3500,
             parent=self
@@ -1335,7 +1219,7 @@ class ContainerStudioInterface(QWidget):
         if not valid_beds:
             InfoBar.warning(
                 title="Tuščias stalas",
-                content="Prieš generuodami, pridėkite bent vieną dizainą į stalo lizdą!",
+                content="Pridėkite bent vieną dizainą į stalą.",
                 position=InfoBarPosition.TOP,
                 parent=self
             )
@@ -1345,7 +1229,7 @@ class ContainerStudioInterface(QWidget):
         if not m_data:
             InfoBar.error(
                 title="Klaida",
-                content="Nepasirinktas joks modelis!",
+                content="Pasirinkite modelį.",
                 position=InfoBarPosition.TOP,
                 parent=self
             )
@@ -1358,7 +1242,7 @@ class ContainerStudioInterface(QWidget):
 
         if is_direct_hotfolder and not dest_dir:
             InfoBar.error(
-                title="Nenurodytas HotFolderio kelias!",
+                title="Nenurodytas HotFolderio kelias",
                 content="Šiam modeliui nustatymuose nenurodytas 'Paskirtis (HotFolderis)' kelias.\nNustatykite jį Nustatymų skirtuke.",
                 orient=Qt.Horizontal,
                 position=InfoBarPosition.TOP_RIGHT,
@@ -1418,24 +1302,34 @@ class ContainerStudioInterface(QWidget):
         self._job_worker = worker
         worker.start()
 
+    def _apply_output_mode(self, output_mode):
+        if output_mode == "direct_hotfolder":
+            self.btn_generate.setText("Siųsti į HotFolderį")
+            self.btn_open_folder.setText("Atidaryti HotFolderį")
+            self.lbl_mode_badge.set_status("info", "Tiesiogiai į HotFolderį")
+        else:
+            minutes = round(get_cleanup_expiry_seconds() / 60)
+            self.btn_generate.setText("Sukurti konteinerį")
+            self.btn_open_folder.setText("Atidaryti aplanką")
+            self.lbl_mode_badge.set_status("neutral", f"Laikinas aplankas · {minutes} min.")
+
     def _set_generate_busy(self, busy):
         self.btn_generate.setEnabled(not busy)
         if busy:
-            self.btn_generate.setText("⏳  Ieškoma spaudos failų...")
+            self.btn_generate.setText("Ieškoma spaudos failų…")
             return
+        self.lbl_generate_hint.setText("")
         m_data = self.get_selected_model_data() or {}
-        if m_data.get("output_mode", "temp_folder") == "direct_hotfolder":
-            self.btn_generate.setText("🚀  SIŲSTI TIESIAI Į HOTFOLDERĮ")
-        else:
-            self.btn_generate.setText("🚀  SUKURTI KONTEINERĮ (10 min. laikinas)")
+        self._apply_output_mode(m_data.get("output_mode", "temp_folder"))
 
     def _on_job_progress(self, done, total, text):
-        self.btn_generate.setText(f"⏳  {text}")
+        self.btn_generate.setText("Vykdoma…")
+        self.lbl_generate_hint.setText(text)
 
     def _on_job_failed(self, err_msg):
         self._set_generate_busy(False)
         InfoBar.error(
-            title="Klaida kuriant konteinerį!",
+            title="Nepavyko sukurti konteinerio",
             content=err_msg,
             orient=Qt.Horizontal,
             isClosable=True,
@@ -1497,11 +1391,11 @@ class ContainerStudioInterface(QWidget):
 
         if missing:
             names = ", ".join(missing_label(n) for _, _, n in missing)
-            content = f"Nerasti {len(missing)} failai: {names}\nNukopijuota: {res.get('copied', 0)}. Trūkstami lizdai mirksi raudonai."
+            content = f"Nerasti {len(missing)} failai: {names}\nNukopijuota: {res.get('copied', 0)}. Trūkstami lizdai pažymėti raudonai."
             if errors:
                 content += "\nKopijavimo klaidos: " + "; ".join(errors[:3])
             InfoBar.error(
-                title="⚠️ DĖMESIO: Ne visi failai išsiųsti!",
+                title="Ne visi failai išsiųsti",
                 content=content,
                 orient=Qt.Horizontal,
                 isClosable=True,
@@ -1512,12 +1406,12 @@ class ContainerStudioInterface(QWidget):
             return
 
         if is_hot:
-            msg = f"Failai ({res.get('copied', 0)} vnt.) sėkmingai nusiųsti tiesiai į HotFolderį!\n📁 {ctx.get('dest_dir', '')}"
+            msg = f"{res.get('copied', 0)} vnt. nusiųsta į HotFolderį: {ctx.get('dest_dir', '')}"
         else:
             minutes = round(get_cleanup_expiry_seconds() / 60)
-            msg = f"Konteinerio aplankas sukurtas ({ctx.get('bed_count', 0)} stalai, {res.get('copied', 0)} failų).\n⏳ Po {minutes} min. laikinas aplankas automatiškai išsivalys!"
+            msg = f"{ctx.get('bed_count', 0)} st., {res.get('copied', 0)} failų. Aplankas bus išvalytas po {minutes} min."
         InfoBar.success(
-            title="Konteineris sukurtas!",
+            title="Konteineris sukurtas",
             content=msg,
             orient=Qt.Horizontal,
             isClosable=True,
@@ -1536,22 +1430,23 @@ class HistoryInterface(QWidget):
         self.filtered_items = []
         self.selected_item = None
         self._job_worker = None
-        self._regen_btn_text = "⚡ Greitas nusiuntimas į aplanką"
+        self._regen_btn_text = "Siųsti dar kartą"
         self.init_ui()
         self.reload_history()
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 12, 16, 12)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(16)
 
         top_bar = QHBoxLayout()
-        top_bar.addWidget(TitleLabel("📜 Generavimo Istorija", self))
+        top_bar.setSpacing(8)
+        top_bar.addWidget(TitleLabel("Generavimo istorija", self))
         top_bar.addStretch(1)
 
         self.search_edit = SearchLineEdit(self)
-        self.search_edit.setPlaceholderText("🔍 Ieškoti pagal užsakymą, modelį...")
-        self.search_edit.setFixedWidth(260)
+        self.search_edit.setPlaceholderText("Ieškoti pagal užsakymą ar modelį")
+        self.search_edit.setFixedWidth(280)
         self.search_edit.textChanged.connect(self.filter_history)
         top_bar.addWidget(self.search_edit)
 
@@ -1559,13 +1454,15 @@ class HistoryInterface(QWidget):
         self.btn_refresh.clicked.connect(self.reload_history)
         top_bar.addWidget(self.btn_refresh)
 
-        self.btn_clear_history = PushButton(FIF.DELETE, "Išvalyti istoriją", self)
+        self.btn_clear_history = DangerPushButton(FIF.DELETE, "Išvalyti istoriją", self)
         self.btn_clear_history.clicked.connect(self.clear_all_history)
         top_bar.addWidget(self.btn_clear_history)
 
         main_layout.addLayout(top_bar)
 
         splitter = QSplitter(Qt.Horizontal, self)
+        splitter.setHandleWidth(16)
+        splitter.setChildrenCollapsible(False)
 
         table_card = CardWidget(self)
         table_layout = QVBoxLayout(table_card)
@@ -1573,7 +1470,7 @@ class HistoryInterface(QWidget):
 
         self.table = TableWidget(self)
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Data ir Laikas", "Užsakymas", "Modelis", "Stalai", "Dizainai"])
+        self.table.setHorizontalHeaderLabels(["Data", "Užsakymas", "Modelis", "Stalai", "Dizainai"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -1584,54 +1481,59 @@ class HistoryInterface(QWidget):
 
         splitter.addWidget(table_card)
 
-        self.detail_card = ElevatedCardWidget(self)
-        self.detail_card.setMinimumWidth(340)
+        self.detail_card = CardWidget(self)
+        self.detail_card.setMinimumWidth(360)
         detail_layout = QVBoxLayout(self.detail_card)
-        detail_layout.setContentsMargins(16, 14, 16, 14)
-        detail_layout.setSpacing(10)
+        detail_layout.setContentsMargins(20, 20, 20, 20)
+        detail_layout.setSpacing(12)
 
         self.lbl_detail_title = SubtitleLabel("Pasirinkite įrašą", self)
         detail_layout.addWidget(self.lbl_detail_title)
 
-        self.lbl_detail_info = BodyLabel("Pasirinkite istorinį užsakymą kairėje lentelėje, kad pamatytumėte detales ir pergeneruotumėte.", self)
+        self.lbl_detail_info = SecondaryLabel("Pasirinkite užsakymą lentelėje, kad pamatytumėte detales.", self)
         self.lbl_detail_info.setWordWrap(True)
         detail_layout.addWidget(self.lbl_detail_info)
+
+        detail_layout.addWidget(divider(self))
 
         self.preview_scroll = SmoothScrollArea(self)
         self.preview_scroll.setWidgetResizable(True)
         self.preview_container = QWidget()
+        self.preview_container.setObjectName("scrollContent")
         self.preview_layout = QVBoxLayout(self.preview_container)
-        self.preview_layout.setContentsMargins(4, 4, 4, 4)
-        self.preview_layout.setSpacing(4)
+        self.preview_layout.setContentsMargins(0, 0, 4, 0)
+        self.preview_layout.setSpacing(2)
         self.preview_scroll.setWidget(self.preview_container)
         detail_layout.addWidget(self.preview_scroll, 1)
 
         actions_box = QVBoxLayout()
-        actions_box.setSpacing(6)
+        actions_box.setSpacing(8)
 
-        self.btn_load_to_studio = PrimaryPushButton(FIF.EDIT, "🔄 Įkelti į redaktorių ir pergeneruoti", self)
-        self.btn_load_to_studio.setFixedHeight(36)
+        self.btn_load_to_studio = PrimaryPushButton(FIF.EDIT, "Įkelti į redaktorių", self)
+        self.btn_load_to_studio.setFixedHeight(44)
         self.btn_load_to_studio.clicked.connect(self.load_selected_to_studio)
         self.btn_load_to_studio.setEnabled(False)
         actions_box.addWidget(self.btn_load_to_studio)
 
-        self.btn_quick_regenerate = PushButton(FIF.SYNC, "⚡ Greitas nusiuntimas į aplanką", self)
-        self.btn_quick_regenerate.setFixedHeight(34)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.btn_quick_regenerate = PushButton(FIF.SYNC, self._regen_btn_text, self)
         self.btn_quick_regenerate.clicked.connect(self.quick_regenerate_selected)
         self.btn_quick_regenerate.setEnabled(False)
-        actions_box.addWidget(self.btn_quick_regenerate)
+        row.addWidget(self.btn_quick_regenerate, 1)
 
-        self.btn_open_saved_folder = PushButton(FIF.FOLDER, "📁 Atidaryti aplanką", self)
-        self.btn_open_saved_folder.setFixedHeight(34)
+        self.btn_open_saved_folder = PushButton(FIF.FOLDER, "Atidaryti aplanką", self)
         self.btn_open_saved_folder.clicked.connect(self.open_selected_folder)
         self.btn_open_saved_folder.setEnabled(False)
-        actions_box.addWidget(self.btn_open_saved_folder)
+        row.addWidget(self.btn_open_saved_folder, 1)
+        actions_box.addLayout(row)
 
-        self.btn_del_entry = PushButton(FIF.DELETE, "Ištrinti šį įrašą", self)
-        self.btn_del_entry.setFixedHeight(30)
+        self.btn_del_entry = DangerPushButton(FIF.DELETE, "Ištrinti įrašą", self)
+        self.btn_del_entry.setFixedHeight(32)
+        self.btn_del_entry.setVariant("danger")
         self.btn_del_entry.clicked.connect(self.delete_selected_entry)
         self.btn_del_entry.setEnabled(False)
-        actions_box.addWidget(self.btn_del_entry)
+        actions_box.addWidget(self.btn_del_entry, 0, Qt.AlignLeft)
 
         detail_layout.addLayout(actions_box)
         splitter.addWidget(self.detail_card)
@@ -1670,7 +1572,7 @@ class HistoryInterface(QWidget):
         else:
             self.selected_item = None
             self.lbl_detail_title.setText("Istorija tuščia")
-            self.lbl_detail_info.setText("Nėra atliktų konteinerių generavimų.")
+            self.lbl_detail_info.setText("Sugeneruoti konteineriai atsiras čia.")
             self.clear_preview_layout()
             self.btn_load_to_studio.setEnabled(False)
             self.btn_quick_regenerate.setEnabled(False)
@@ -1689,11 +1591,15 @@ class HistoryInterface(QWidget):
             self.selected_item = self.filtered_items[row]
             it = self.selected_item
 
-            self.lbl_detail_title.setText(f"🏷️ {it.get('job_name', 'Užsakymas')}")
-            info_str = f"<b>Data:</b> {it.get('timestamp')}<br>" \
-                       f"<b>Modelis:</b> {it.get('model_name')}<br>" \
-                       f"<b>Rėmas:</b> {it.get('jig_name')}<br>" \
-                       f"<b>Stalai:</b> {it.get('total_beds')} st. | <b>Dizainai:</b> {it.get('total_designs')} vnt."
+            self.lbl_detail_title.setText(it.get('job_name', 'Užsakymas') or "Užsakymas")
+            mode = "HotFolderis" if it.get("output_mode") == "direct_hotfolder" else "Laikinas aplankas"
+            muted = tokens()["muted"]
+            rows = [("Data", it.get('timestamp', '')), ("Modelis", it.get('model_name', '')),
+                    ("Rėmas", it.get('jig_name', '')), ("Išvestis", mode),
+                    ("Kiekis", f"{it.get('total_beds', 1)} st. · {it.get('total_designs', 0)} vnt.")]
+            info_str = "<table cellspacing='0' cellpadding='2'>" + "".join(
+                f"<tr><td style='color:{muted}; padding-right:16px'>{k}</td><td>{v}</td></tr>" for k, v in rows
+            ) + "</table>"
             self.lbl_detail_info.setText(info_str)
 
             self.clear_preview_layout()
@@ -1701,14 +1607,16 @@ class HistoryInterface(QWidget):
             bed_names = it.get("bed_names", [])
             for b_idx, bed_items in enumerate(beds):
                 b_name = bed_names[b_idx] if b_idx < len(bed_names) and bed_names[b_idx] else f"Stalas #{b_idx + 1}"
-                b_lbl = StrongBodyLabel(f"{b_name}:", self.preview_container)
-                b_lbl.setStyleSheet("color: #10b981; font-weight: bold; margin-top: 4px;")
+                b_lbl = SectionLabel(b_name, self.preview_container)
+                b_lbl.setContentsMargins(0, 8 if b_idx else 0, 0, 4)
                 self.preview_layout.addWidget(b_lbl)
 
                 for s_idx, d in enumerate(bed_items):
                     if d:
-                        row_lbl = BodyLabel(f"  {s_idx + 1:02d}. {d.get('name')}", self.preview_container)
-                        row_lbl.setStyleSheet("font-size: 11px;")
+                        row_lbl = QLabel(
+                            f"<span style='color:{tokens()['muted']}'>{s_idx + 1:02d}</span>&nbsp;&nbsp;{d.get('name')}",
+                            self.preview_container)
+                        row_lbl.setStyleSheet("font-size: 13px; padding: 2px 0;")
                         self.preview_layout.addWidget(row_lbl)
 
             self.preview_layout.addStretch(1)
@@ -1738,7 +1646,7 @@ class HistoryInterface(QWidget):
 
         if is_direct_hotfolder and not dest_dir:
             InfoBar.error(
-                title="Nenurodytas HotFolderis!",
+                title="Nenurodytas HotFolderis",
                 content="Šiam modeliui nenurodytas paskirties HotFolderis.",
                 position=InfoBarPosition.TOP_RIGHT,
                 parent=self
@@ -1773,9 +1681,9 @@ class HistoryInterface(QWidget):
         }
 
         self.btn_quick_regenerate.setEnabled(False)
-        self.btn_quick_regenerate.setText("⏳ Siunčiama...")
+        self.btn_quick_regenerate.setText("Siunčiama…")
         worker = ContainerJobWorker(plan, self)
-        worker.progress.connect(lambda d, t, txt: self.btn_quick_regenerate.setText(f"⏳ {txt}"))
+        worker.progress.connect(lambda d, t, txt: self.btn_quick_regenerate.setText("Siunčiama…"))
         worker.finished_ok.connect(lambda res: self._on_regenerate_finished(res, job_title, is_direct_hotfolder))
         worker.failed.connect(self._on_regenerate_failed)
         self._job_worker = worker
@@ -1788,7 +1696,7 @@ class HistoryInterface(QWidget):
     def _on_regenerate_failed(self, err_msg):
         self._restore_regenerate_button()
         InfoBar.error(
-            title="Klaida pergeneruojant!",
+            title="Nepavyko išsiųsti",
             content=err_msg,
             position=InfoBarPosition.TOP_RIGHT,
             duration=-1,
@@ -1822,7 +1730,7 @@ class HistoryInterface(QWidget):
         if missing:
             names = ", ".join(missing_label(n) for _, _, n in missing)
             InfoBar.error(
-                title="⚠️ Ne visi failai rasti!",
+                title="Ne visi failai rasti",
                 content=f"Užsakymas '{job_title}': nukopijuota {res.get('copied', 0)}, nerasta {len(missing)}: {names}",
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=-1,
@@ -1835,7 +1743,7 @@ class HistoryInterface(QWidget):
         else:
             msg = f"Užsakymas '{job_title}' nukopijuotas į laikiną aplanką ({res.get('copied', 0)} failų)."
         InfoBar.success(
-            title="Sėkmingai atkurta!",
+            title="Išsiųsta",
             content=msg,
             position=InfoBarPosition.TOP_RIGHT,
             duration=3500,
@@ -1865,12 +1773,22 @@ class HistoryInterface(QWidget):
     def delete_selected_entry(self):
         if not self.selected_item:
             return
+        if not confirm(self, "Ištrinti įrašą?",
+                       f"Įrašas „{self.selected_item.get('job_name', '')}“ bus pašalintas iš istorijos. "
+                       "Spaudos failai neliečiami."):
+            return
         target_id = self.selected_item.get("id")
         self.history_items = [it for it in self.history_items if it.get("id") != target_id]
         save_history_data(self.history_items)
         self.filter_history(self.search_edit.text().strip())
 
     def clear_all_history(self):
+        if not self.history_items:
+            return
+        if not confirm(self, "Išvalyti visą istoriją?",
+                       f"Bus ištrinti visi {len(self.history_items)} įrašai. Šio veiksmo atšaukti negalima.",
+                       "Išvalyti"):
+            return
         self.history_items = []
         save_history_data([])
         self.filter_history("")
@@ -1904,27 +1822,23 @@ class ModelsSettingsInterface(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 12, 16, 12)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(16)
 
         top_box = QHBoxLayout()
+        top_box.setSpacing(12)
         top_box.addWidget(TitleLabel("Nustatymai", self))
         top_box.addStretch(1)
 
-        top_box.addWidget(StrongBodyLabel("🎨 Tema:", self))
         self.theme_segment = SegmentedWidget(self)
-        self.theme_segment.addItem("light", "☀️ Šviesi", lambda: self.on_theme_selected("LIGHT"))
-        self.theme_segment.addItem("dark", "🌙 Tamsi", lambda: self.on_theme_selected("DARK"))
-
+        self.theme_segment.addItem("light", "Šviesi", lambda: self.on_theme_selected("LIGHT"))
+        self.theme_segment.addItem("dark", "Tamsi", lambda: self.on_theme_selected("DARK"))
         cfg = load_app_config()
         curr_th = cfg.get("theme", "LIGHT").lower()
         self.theme_segment.setCurrentItem(curr_th if curr_th in ("light", "dark") else "light")
         top_box.addWidget(self.theme_segment)
 
-        top_box.addSpacing(14)
-
-        self.btn_save_all = PrimaryPushButton(FIF.SAVE, "💾 Išsaugoti nustatymus", self)
-        self.btn_save_all.setFixedHeight(34)
+        self.btn_save_all = PrimaryPushButton(FIF.SAVE, "Išsaugoti", self)
         self.btn_save_all.clicked.connect(self.save_all_data)
         top_box.addWidget(self.btn_save_all)
         main_layout.addLayout(top_box)
@@ -1948,14 +1862,49 @@ class ModelsSettingsInterface(QWidget):
         self.init_search_tab(self.search_tab)
         self.stack.addWidget(self.search_tab)
 
-        self.segmented_nav.addItem("modelsTab", "📱 Modelių ir Žaliavų Nustatymai", lambda: self.stack.setCurrentIndex(0))
-        self.segmented_nav.addItem("jigsTab", "📐 Rėmų (Jigs / Stalo) Valdymas", lambda: self.stack.setCurrentIndex(1))
-        self.segmented_nav.addItem("updatesTab", "🚀 Atnaujinimai ir Versija", lambda: self.stack.setCurrentIndex(2))
-        self.segmented_nav.addItem("searchTab", "📂 Paieškos Aplankai", lambda: self.stack.setCurrentIndex(3))
+        self.segmented_nav.addItem("modelsTab", "Modeliai", lambda: self.stack.setCurrentIndex(0))
+        self.segmented_nav.addItem("jigsTab", "Rėmai", lambda: self.stack.setCurrentIndex(1))
+        self.segmented_nav.addItem("searchTab", "Paieškos aplankai", lambda: self.stack.setCurrentIndex(3))
+        self.segmented_nav.addItem("updatesTab", "Atnaujinimai", lambda: self.stack.setCurrentIndex(2))
         self.segmented_nav.setCurrentItem("modelsTab")
 
-        main_layout.addWidget(self.segmented_nav)
+        nav_row = QHBoxLayout()
+        nav_row.addWidget(self.segmented_nav)
+        nav_row.addStretch(1)
+        main_layout.addLayout(nav_row)
         main_layout.addWidget(self.stack, 1)
+
+    def show_tab(self, index):
+        keys = ["modelsTab", "jigsTab", "updatesTab", "searchTab"]
+        if 0 <= index < len(keys):
+            self.segmented_nav.setCurrentItem(keys[index])
+            self.stack.setCurrentIndex(index)
+
+    @staticmethod
+    def _field(parent, label_text, widget, hint=None):
+        box = QVBoxLayout()
+        box.setSpacing(6)
+        box.addWidget(FieldLabel(label_text, parent))
+        if isinstance(widget, QWidget):
+            box.addWidget(widget)
+        else:
+            box.addLayout(widget)
+        if hint:
+            h = CaptionLabel(hint, parent)
+            h.setWordWrap(True)
+            box.addWidget(h)
+        return box
+
+    def _list_card(self, parent_widget, title):
+        card = CardWidget(parent_widget)
+        card.setFixedWidth(300)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 16, 12, 12)
+        lay.setSpacing(12)
+        head = SectionLabel(title, parent_widget)
+        head.setContentsMargins(4, 0, 0, 0)
+        lay.addWidget(head)
+        return card, lay
 
     def on_theme_selected(self, theme_mode):
         cfg = load_app_config()
@@ -1965,93 +1914,93 @@ class ModelsSettingsInterface(QWidget):
 
     def init_models_tab(self, parent_widget):
         layout = QHBoxLayout(parent_widget)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
 
-        left_card = CardWidget(parent_widget)
-        left_card.setFixedWidth(300)
-        left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(10, 10, 10, 10)
-        left_layout.setSpacing(8)
+        left_card, left_layout = self._list_card(parent_widget, "Modeliai")
 
         self.search_model_edit = SearchLineEdit(parent_widget)
-        self.search_model_edit.setPlaceholderText("🔍 Ieškoti modelio...")
+        self.search_model_edit.setPlaceholderText("Ieškoti modelio")
         self.search_model_edit.textChanged.connect(self.filter_models_table)
         left_layout.addWidget(self.search_model_edit)
 
         self.models_table = TableWidget(parent_widget)
         self.models_table.setColumnCount(1)
-        self.models_table.setHorizontalHeaderLabels(["Modelių Sąrašas"])
+        self.models_table.setHorizontalHeaderLabels(["Pavadinimas"])
         self.models_table.horizontalHeader().setStretchLastSection(True)
+        self.models_table.horizontalHeader().hide()
         self.models_table.cellClicked.connect(self.on_model_selected)
         left_layout.addWidget(self.models_table, 1)
 
         btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
         self.btn_add_model = PushButton(FIF.ADD, "Naujas", parent_widget)
         self.btn_add_model.clicked.connect(self.add_model)
-        btn_box.addWidget(self.btn_add_model)
+        btn_box.addWidget(self.btn_add_model, 1)
 
-        self.btn_del_model = PushButton(FIF.DELETE, "Trinti", parent_widget)
+        self.btn_del_model = DangerPushButton(FIF.DELETE, "Ištrinti", parent_widget)
         self.btn_del_model.clicked.connect(self.delete_model)
-        btn_box.addWidget(self.btn_del_model)
+        btn_box.addWidget(self.btn_del_model, 1)
         left_layout.addLayout(btn_box)
 
         layout.addWidget(left_card)
 
-        self.model_detail_card = ElevatedCardWidget(parent_widget)
+        self.model_detail_card = CardWidget(parent_widget)
         detail_layout = QVBoxLayout(self.model_detail_card)
-        detail_layout.setContentsMargins(16, 14, 16, 14)
-        detail_layout.setSpacing(12)
+        detail_layout.setContentsMargins(24, 20, 24, 20)
+        detail_layout.setSpacing(20)
 
         self.model_detail_title = SubtitleLabel("Pasirinkite modelį", parent_widget)
         detail_layout.addWidget(self.model_detail_title)
 
         form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(16)
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 1)
 
-        form.addWidget(StrongBodyLabel("Modelio Pavadinimas:", parent_widget), 0, 0)
         self.edit_m_name = LineEdit(parent_widget)
         self.edit_m_name.textChanged.connect(self.on_model_edited)
-        form.addWidget(self.edit_m_name, 0, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Modelio pavadinimas", self.edit_m_name), 0, 0, 1, 2)
 
-        form.addWidget(StrongBodyLabel("Priskirtas Rėmas (Jig):", parent_widget), 1, 0)
         self.combo_m_jig = ComboBox(parent_widget)
         self.combo_m_jig.currentIndexChanged.connect(self.on_model_edited)
-        form.addWidget(self.combo_m_jig, 1, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Rėmas", self.combo_m_jig), 1, 0)
 
-        form.addWidget(StrongBodyLabel("Išvesties Tipas:", parent_widget), 2, 0)
         self.combo_m_output_mode = ComboBox(parent_widget)
-        self.combo_m_output_mode.addItem("📁 Laikinas aplankas (Išsivalo po 10 min.)", userData="temp_folder")
-        self.combo_m_output_mode.addItem("⚡ Tiesiogiai į ColorGATE HotFolderį", userData="direct_hotfolder")
+        self.combo_m_output_mode.addItem("Laikinas aplankas", userData="temp_folder")
+        self.combo_m_output_mode.addItem("Tiesiogiai į ColorGATE HotFolderį", userData="direct_hotfolder")
         self.combo_m_output_mode.currentIndexChanged.connect(self.on_model_edited)
-        form.addWidget(self.combo_m_output_mode, 2, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Išvestis", self.combo_m_output_mode), 1, 1)
 
-        form.addWidget(StrongBodyLabel("Šaltinis (Spaudos failų aplankas):", parent_widget), 3, 0)
+        src_row = QHBoxLayout()
+        src_row.setSpacing(8)
         self.edit_m_source = LineEdit(parent_widget)
-        self.edit_m_source.setPlaceholderText(r"pvz. \\192.168.1.143\podbase-hotfolder\MacBook...")
+        self.edit_m_source.setPlaceholderText(r"pvz. \\192.168.1.143\podbase-hotfolder\MacBook")
         self.edit_m_source.textChanged.connect(self.on_model_edited)
-        form.addWidget(self.edit_m_source, 3, 1)
-
-        self.btn_browse_source = PushButton(FIF.FOLDER, "Naršyti...", parent_widget)
+        src_row.addWidget(self.edit_m_source, 1)
+        self.btn_browse_source = PushButton(FIF.FOLDER, "Naršyti…", parent_widget)
         self.btn_browse_source.clicked.connect(self.browse_source)
-        form.addWidget(self.btn_browse_source, 3, 2)
+        src_row.addWidget(self.btn_browse_source)
+        form.addLayout(self._field(parent_widget, "Spaudos failų aplankas", src_row), 2, 0, 1, 2)
 
-        form.addWidget(StrongBodyLabel("Paskirtis (HotFolderis arba Aplankas):", parent_widget), 4, 0)
+        dst_row = QHBoxLayout()
+        dst_row.setSpacing(8)
         self.edit_m_dest = LineEdit(parent_widget)
-        self.edit_m_dest.setPlaceholderText(r"pvz. C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD...")
+        self.edit_m_dest.setPlaceholderText(r"pvz. C:/ProgramData/ColorGATE Software/Productionserver25/HotDir/IPAD")
         self.edit_m_dest.textChanged.connect(self.on_model_edited)
-        form.addWidget(self.edit_m_dest, 4, 1)
-
-        self.btn_browse_dest = PushButton(FIF.FOLDER, "Naršyti...", parent_widget)
+        dst_row.addWidget(self.edit_m_dest, 1)
+        self.btn_browse_dest = PushButton(FIF.FOLDER, "Naršyti…", parent_widget)
         self.btn_browse_dest.clicked.connect(self.browse_dest)
-        form.addWidget(self.btn_browse_dest, 4, 2)
+        dst_row.addWidget(self.btn_browse_dest)
+        form.addLayout(self._field(parent_widget, "Paskirtis (HotFolderis arba aplankas)", dst_row), 3, 0, 1, 2)
 
-        form.addWidget(StrongBodyLabel("Alijasai / Raktažodžiai:", parent_widget), 5, 0)
         self.edit_m_aliases = LineEdit(parent_widget)
-        self.edit_m_aliases.setPlaceholderText("Atskirti kableliais: pvz. MacBook Air 13, A1932, A2179")
+        self.edit_m_aliases.setPlaceholderText("pvz. MacBook Air 13, A1932, A2179")
         self.edit_m_aliases.textChanged.connect(self.on_model_edited)
-        form.addWidget(self.edit_m_aliases, 5, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Kiti pavadinimai", self.edit_m_aliases,
+                                   "Atskirkite kableliais. Pagal juos atpažįstamas modelis iš naršyklės plėtinio."),
+                       4, 0, 1, 2)
 
         detail_layout.addLayout(form)
         detail_layout.addStretch(1)
@@ -2065,77 +2014,72 @@ class ModelsSettingsInterface(QWidget):
 
     def init_jigs_tab(self, parent_widget):
         layout = QHBoxLayout(parent_widget)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
 
-        left_card = CardWidget(parent_widget)
-        left_card.setFixedWidth(300)
-        left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(10, 10, 10, 10)
-        left_layout.setSpacing(8)
-
-        left_layout.addWidget(StrongBodyLabel("Sukurti Rėmai (Jigs):", parent_widget))
+        left_card, left_layout = self._list_card(parent_widget, "Rėmai")
         self.jigs_table = TableWidget(parent_widget)
         self.jigs_table.setColumnCount(1)
-        self.jigs_table.setHorizontalHeaderLabels(["Rėmo Pavadinimas"])
+        self.jigs_table.setHorizontalHeaderLabels(["Pavadinimas"])
         self.jigs_table.horizontalHeader().setStretchLastSection(True)
+        self.jigs_table.horizontalHeader().hide()
         self.jigs_table.cellClicked.connect(self.on_jig_selected)
         left_layout.addWidget(self.jigs_table, 1)
 
         btn_box = QHBoxLayout()
-        self.btn_add_jig = PushButton(FIF.ADD, "Naujas Rėmas", parent_widget)
+        btn_box.setSpacing(8)
+        self.btn_add_jig = PushButton(FIF.ADD, "Naujas", parent_widget)
         self.btn_add_jig.clicked.connect(self.add_jig)
-        btn_box.addWidget(self.btn_add_jig)
+        btn_box.addWidget(self.btn_add_jig, 1)
 
-        self.btn_del_jig = PushButton(FIF.DELETE, "Trinti Rėmą", parent_widget)
+        self.btn_del_jig = DangerPushButton(FIF.DELETE, "Ištrinti", parent_widget)
         self.btn_del_jig.clicked.connect(self.delete_jig)
-        btn_box.addWidget(self.btn_del_jig)
+        btn_box.addWidget(self.btn_del_jig, 1)
         left_layout.addLayout(btn_box)
 
         layout.addWidget(left_card)
 
-        self.jig_detail_card = ElevatedCardWidget(parent_widget)
+        self.jig_detail_card = CardWidget(parent_widget)
         detail_layout = QVBoxLayout(self.jig_detail_card)
-        detail_layout.setContentsMargins(16, 14, 16, 14)
-        detail_layout.setSpacing(12)
+        detail_layout.setContentsMargins(24, 20, 24, 20)
+        detail_layout.setSpacing(20)
 
-        self.jig_detail_title = SubtitleLabel("Rėmo konfigūracija", parent_widget)
+        self.jig_detail_title = SubtitleLabel("Rėmo nustatymai", parent_widget)
         detail_layout.addWidget(self.jig_detail_title)
 
         form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(16)
+        form.setColumnStretch(0, 1)
+        form.setColumnStretch(1, 1)
 
-        form.addWidget(StrongBodyLabel("Rėmo Pavadinimas:", parent_widget), 0, 0)
         self.edit_j_name = LineEdit(parent_widget)
-        self.edit_j_name.setPlaceholderText("pvz. Rėmas 2x5 (10 vnt. - iPad)")
+        self.edit_j_name.setPlaceholderText("pvz. Rėmas 2x5 (iPad)")
         self.edit_j_name.textChanged.connect(self.on_jig_edited)
-        form.addWidget(self.edit_j_name, 0, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Rėmo pavadinimas", self.edit_j_name), 0, 0, 1, 2)
 
-        form.addWidget(StrongBodyLabel("Eilučių skaičius (Rows):", parent_widget), 1, 0)
         self.spin_j_rows = SpinBox(parent_widget)
         self.spin_j_rows.setRange(1, 20)
         self.spin_j_rows.setValue(2)
         self.spin_j_rows.valueChanged.connect(self.on_jig_edited)
-        form.addWidget(self.spin_j_rows, 1, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Eilutės", self.spin_j_rows), 1, 0)
 
-        form.addWidget(StrongBodyLabel("Stulpelių skaičius (Cols):", parent_widget), 2, 0)
         self.spin_j_cols = SpinBox(parent_widget)
         self.spin_j_cols.setRange(1, 30)
         self.spin_j_cols.setValue(5)
         self.spin_j_cols.valueChanged.connect(self.on_jig_edited)
-        form.addWidget(self.spin_j_cols, 2, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Stulpeliai", self.spin_j_cols), 1, 1)
 
-        form.addWidget(StrongBodyLabel("Bendras lizdų skaičius:", parent_widget), 3, 0)
-        self.lbl_j_total = BodyLabel("10 lizdų", parent_widget)
-        self.lbl_j_total.setStyleSheet("font-weight: bold; color: #10b981; font-size: 13px;")
-        form.addWidget(self.lbl_j_total, 3, 1, 1, 2)
+        total_row = QHBoxLayout()
+        self.lbl_j_total = StatusBadge("10 lizdų", "neutral", parent_widget, dot=False)
+        total_row.addWidget(self.lbl_j_total)
+        total_row.addStretch(1)
+        form.addLayout(self._field(parent_widget, "Lizdų iš viso", total_row), 2, 0, 1, 2)
 
-        form.addWidget(StrongBodyLabel("Aprašymas / Pastaba:", parent_widget), 4, 0)
         self.edit_j_desc = LineEdit(parent_widget)
         self.edit_j_desc.setPlaceholderText("pvz. Skirtas iPad / MacBook")
         self.edit_j_desc.textChanged.connect(self.on_jig_edited)
-        form.addWidget(self.edit_j_desc, 4, 1, 1, 2)
+        form.addLayout(self._field(parent_widget, "Pastaba", self.edit_j_desc), 3, 0, 1, 2)
 
         detail_layout.addLayout(form)
         detail_layout.addStretch(1)
@@ -2148,93 +2092,80 @@ class ModelsSettingsInterface(QWidget):
 
     def init_updates_tab(self, parent_widget):
         layout = QVBoxLayout(parent_widget)
-        layout.setContentsMargins(10, 14, 10, 10)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
 
-        # Version Info Card
-        ver_card = ElevatedCardWidget(parent_widget)
+        ver_card = CardWidget(parent_widget)
         v_layout = QHBoxLayout(ver_card)
-        v_layout.setContentsMargins(16, 16, 16, 16)
-        v_layout.setSpacing(14)
+        v_layout.setContentsMargins(20, 20, 20, 20)
+        v_layout.setSpacing(16)
 
         lbl_app_logo = QLabel(ver_card)
         if os.path.exists(ICON_FILE):
-            lbl_app_logo.setPixmap(QPixmap(ICON_FILE).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            lbl_app_logo.setPixmap(QPixmap(ICON_FILE).scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         v_layout.addWidget(lbl_app_logo)
 
         v_info_box = QVBoxLayout()
-        v_info_box.setSpacing(3)
-        v_title = TitleLabel("Podbase Container Studio", ver_card)
-        v_title.setStyleSheet("font-size: 20px; font-weight: 800; color: #10b981;")
-        v_info_box.addWidget(v_title)
-
-        v_ver_lbl = BodyLabel(f"Dabartinė įdiegta versija: <b>v{CURRENT_VERSION}</b>", ver_card)
+        v_info_box.setSpacing(2)
+        v_info_box.addWidget(SubtitleLabel("Podbase Container Studio", ver_card))
+        v_ver_lbl = SecondaryLabel(f"Įdiegta versija v{CURRENT_VERSION}", ver_card)
+        tabular(v_ver_lbl)
         v_info_box.addWidget(v_ver_lbl)
         v_layout.addLayout(v_info_box)
 
         v_layout.addStretch(1)
 
-        self.btn_check_updates = PrimaryPushButton(FIF.SYNC, "🔍 Tikrinti atnaujinimus dabar", ver_card)
-        self.btn_check_updates.setFixedHeight(38)
-        self.btn_check_updates.clicked.connect(self.on_manual_check_updates)
-        v_layout.addWidget(self.btn_check_updates)
-
-        self.btn_open_log = PushButton(FIF.DOCUMENT, "📄 Atidaryti žurnalą", ver_card)
-        self.btn_open_log.setFixedHeight(38)
+        self.btn_open_log = PushButton(FIF.DOCUMENT, "Atidaryti žurnalą", ver_card)
         self.btn_open_log.setToolTip(f"Programos klaidų žurnalas: {LOG_FILE}")
         self.btn_open_log.clicked.connect(self.open_log_file)
         v_layout.addWidget(self.btn_open_log)
 
+        self.btn_check_updates = PrimaryPushButton(FIF.SYNC, "Tikrinti atnaujinimus", ver_card)
+        self.btn_check_updates.clicked.connect(self.on_manual_check_updates)
+        v_layout.addWidget(self.btn_check_updates)
+
         layout.addWidget(ver_card)
 
-        # GitHub Repo & Settings Card
         repo_card = CardWidget(parent_widget)
         r_layout = QVBoxLayout(repo_card)
-        r_layout.setContentsMargins(18, 16, 18, 16)
-        r_layout.setSpacing(12)
+        r_layout.setContentsMargins(20, 20, 20, 20)
+        r_layout.setSpacing(16)
 
-        r_title = SubtitleLabel("GitHub Atnaujinimų Nustatymai", repo_card)
-        r_layout.addWidget(r_title)
+        r_layout.addWidget(SubtitleLabel("Automatiniai atnaujinimai", repo_card))
 
         cfg = load_app_config()
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(12)
-
-        form.addWidget(StrongBodyLabel("GitHub Repozitorija (owner/repo):", repo_card), 0, 0)
         self.edit_github_repo = LineEdit(repo_card)
         self.edit_github_repo.setText(cfg.get("github_repo", DEFAULT_GITHUB_REPO))
         self.edit_github_repo.setPlaceholderText("pvz. lkuprys/CC")
-        form.addWidget(self.edit_github_repo, 0, 1)
+        self.edit_github_repo.setMaximumWidth(420)
+        r_layout.addLayout(self._field(repo_card, "GitHub repozitorija", self.edit_github_repo))
 
-        self.chk_auto_updates = CheckBox("Automatiškai tikrinti atnaujinimus (paleidus programą ir kas 30 min.)", repo_card)
+        self.chk_auto_updates = CheckBox("Tikrinti paleidus programą ir kas 30 min.", repo_card)
         self.chk_auto_updates.setChecked(cfg.get("auto_check_updates", True))
-        form.addWidget(self.chk_auto_updates, 1, 0, 1, 2)
-
-        r_layout.addLayout(form)
-        r_layout.addStretch(1)
+        r_layout.addWidget(self.chk_auto_updates)
 
         layout.addWidget(repo_card)
         layout.addStretch(1)
 
     def init_search_tab(self, parent_widget):
         layout = QVBoxLayout(parent_widget)
-        layout.setContentsMargins(10, 14, 10, 10)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
 
         card = CardWidget(parent_widget)
         c_layout = QVBoxLayout(card)
-        c_layout.setContentsMargins(18, 16, 18, 16)
-        c_layout.setSpacing(12)
+        c_layout.setContentsMargins(20, 20, 20, 20)
+        c_layout.setSpacing(16)
 
-        c_layout.addWidget(SubtitleLabel("Brokų (Rejected) Aplankas", card))
-        hint = BodyLabel(
-            "Papildomas aplankas, kuriame taip pat ieškoma spaudos failų pagal PID (visiems modeliams). "
-            "Paieška vyksta ir jo poaplankiuose. Jei tas pats PID randamas keliuose aplankuose, "
-            "imamas naujausias failas.", card)
+        head = QVBoxLayout()
+        head.setSpacing(4)
+        head.addWidget(SubtitleLabel("Brokų aplankas", card))
+        hint = SecondaryLabel(
+            "Papildomas aplankas, kuriame visiems modeliams ieškoma spaudos failų pagal PID, įskaitant poaplankius. "
+            "Jei tas pats PID randamas keliuose aplankuose, imamas naujausias failas.", card)
         hint.setWordWrap(True)
-        c_layout.addWidget(hint)
+        head.addWidget(hint)
+        c_layout.addLayout(head)
 
         cfg = load_app_config()
         row = QHBoxLayout()
@@ -2245,13 +2176,17 @@ class ModelsSettingsInterface(QWidget):
         self.edit_reject_folder.setClearButtonEnabled(True)
         row.addWidget(self.edit_reject_folder, 1)
 
-        btn_browse = PushButton(FIF.FOLDER, "Pasirinkti...", card)
+        btn_browse = PushButton(FIF.FOLDER, "Pasirinkti…", card)
         btn_browse.clicked.connect(self.browse_reject_folder)
         row.addWidget(btn_browse)
-        c_layout.addLayout(row)
+        c_layout.addLayout(self._field(card, "Aplanko kelias", row))
 
-        self.lbl_reject_status = CaptionLabel("", card)
-        c_layout.addWidget(self.lbl_reject_status)
+        status_row = QHBoxLayout()
+        self.lbl_reject_status = StatusBadge("", "neutral", card)
+        status_row.addWidget(self.lbl_reject_status)
+        status_row.addStretch(1)
+        c_layout.addLayout(status_row)
+
         # Tinklo kelio tikrinimas gali užtrukti, todėl tikriname tik nustojus rašyti
         self._reject_check_timer = QTimer(self)
         self._reject_check_timer.setSingleShot(True)
@@ -2260,13 +2195,12 @@ class ModelsSettingsInterface(QWidget):
         self.edit_reject_folder.textChanged.connect(self._reject_check_timer.start)
         self.update_reject_status()
 
-        info = CaptionLabel(
-            "Visada ieškoma: modelio šaltinio aplanke ir bendrame tinklo aplanke "
-            f"{NETWORK_HOTFOLDER_DEFAULT}. Nepamirškite paspausti „Išsaugoti“.", card)
-        info.setWordWrap(True)
-        c_layout.addWidget(info)
-
         layout.addWidget(card)
+
+        layout.addWidget(Notice(
+            "info", "Visada ieškoma ir šiuose aplankuose",
+            f"Modelio spaudos failų aplanke ir bendrame tinklo aplanke {NETWORK_HOTFOLDER_DEFAULT}. "
+            "Pakeitę kelią, paspauskite „Išsaugoti“.", parent_widget))
         layout.addStretch(1)
 
     def browse_reject_folder(self):
@@ -2278,14 +2212,11 @@ class ModelsSettingsInterface(QWidget):
     def update_reject_status(self):
         path = self.edit_reject_folder.text().strip()
         if not path:
-            self.lbl_reject_status.setText("Brokų aplankas nenustatytas.")
-            self.lbl_reject_status.setStyleSheet("color: #64748b;")
+            self.lbl_reject_status.set_status("neutral", "Nenustatytas")
         elif os.path.exists(path):
-            self.lbl_reject_status.setText("🟢 Aplankas pasiekiamas.")
-            self.lbl_reject_status.setStyleSheet("color: #10b981;")
+            self.lbl_reject_status.set_status("success", "Pasiekiamas")
         else:
-            self.lbl_reject_status.setText("🔴 Aplankas nerastas arba nepasiekiamas.")
-            self.lbl_reject_status.setStyleSheet("color: #ef4444;")
+            self.lbl_reject_status.set_status("error", "Nerastas arba nepasiekiamas")
 
     def open_log_file(self):
         if not os.path.exists(LOG_FILE):
@@ -2344,7 +2275,7 @@ class ModelsSettingsInterface(QWidget):
         if 0 <= real_idx < len(self.models_list):
             self.current_model_idx = real_idx
             m = self.models_list[real_idx]
-            self.model_detail_title.setText(f"📱 {m.get('name', 'Modelis')}")
+            self.model_detail_title.setText(m.get('name', '') or "Modelis")
 
             self.edit_m_name.blockSignals(True)
             self.edit_m_source.blockSignals(True)
@@ -2400,7 +2331,7 @@ class ModelsSettingsInterface(QWidget):
 
             aliases_raw = self.edit_m_aliases.text().split(",")
             m["aliases"] = [a.strip() for a in aliases_raw if a.strip()]
-            self.model_detail_title.setText(f"📱 {m['name']}")
+            self.model_detail_title.setText(m['name'] or "Modelis")
 
     def on_jig_selected(self, row, col):
         self.select_jig_row(row)
@@ -2409,7 +2340,7 @@ class ModelsSettingsInterface(QWidget):
         if 0 <= row < len(self.jigs_list):
             self.current_jig_idx = row
             j = self.jigs_list[row]
-            self.jig_detail_title.setText(f"📐 {j.get('name', 'Rėmas')}")
+            self.jig_detail_title.setText(j.get('name', '') or "Rėmas")
 
             self.edit_j_name.blockSignals(True)
             self.spin_j_rows.blockSignals(True)
@@ -2421,7 +2352,7 @@ class ModelsSettingsInterface(QWidget):
             cols = j.get("cols", 5)
             self.spin_j_rows.setValue(rows)
             self.spin_j_cols.setValue(cols)
-            self.lbl_j_total.setText(f"{rows * cols} lizdų ({rows} eil. x {cols} stulp.)")
+            self.lbl_j_total.setText(f"{rows * cols} lizdų · {rows} × {cols}")
             self.edit_j_desc.setText(j.get("description", ""))
 
             self.edit_j_name.blockSignals(False)
@@ -2440,8 +2371,8 @@ class ModelsSettingsInterface(QWidget):
             j["total_slots"] = rows * cols
             j["description"] = self.edit_j_desc.text().strip()
 
-            self.lbl_j_total.setText(f"{rows * cols} lizdų ({rows} eil. x {cols} stulp.)")
-            self.jig_detail_title.setText(f"📐 {j['name']}")
+            self.lbl_j_total.setText(f"{rows * cols} lizdų · {rows} × {cols}")
+            self.jig_detail_title.setText(j['name'] or "Rėmas")
 
     def browse_source(self):
         curr = self.edit_m_source.text().strip() or "C:/"
@@ -2459,7 +2390,7 @@ class ModelsSettingsInterface(QWidget):
 
     def add_model(self):
         new_m = {
-            "name": f"Naujas Modelis {len(self.models_list) + 1}",
+            "name": f"Naujas modelis {len(self.models_list) + 1}",
             "jig_id": self.jigs_list[0].get("id") if self.jigs_list else "jig_2x5",
             "source": r"\\192.168.1.143\podbase-hotfolder\BENDRAS_PODBASE_HOTFOLDER",
             "destination": "",
@@ -2472,6 +2403,10 @@ class ModelsSettingsInterface(QWidget):
 
     def delete_model(self):
         if 0 <= self.current_model_idx < len(self.models_list):
+            name = self.models_list[self.current_model_idx].get("name", "")
+            if not confirm(self, "Ištrinti modelį?",
+                           f"Modelis „{name}“ bus pašalintas. Pakeitimas įsigalios paspaudus „Išsaugoti“."):
+                return
             del self.models_list[self.current_model_idx]
             self.populate_models_table()
             if self.models_list:
@@ -2481,7 +2416,7 @@ class ModelsSettingsInterface(QWidget):
         new_id = f"jig_{int(time.time())}"
         new_j = {
             "id": new_id,
-            "name": f"Naujas Rėmas ({len(self.jigs_list) + 1})",
+            "name": f"Naujas rėmas {len(self.jigs_list) + 1}",
             "rows": 2,
             "cols": 5,
             "total_slots": 10,
@@ -2494,6 +2429,11 @@ class ModelsSettingsInterface(QWidget):
 
     def delete_jig(self):
         if 0 <= self.current_jig_idx < len(self.jigs_list):
+            name = self.jigs_list[self.current_jig_idx].get("name", "")
+            if not confirm(self, "Ištrinti rėmą?",
+                           f"Rėmas „{name}“ bus pašalintas. Modeliai, kurie jį naudoja, gaus pirmąjį sąrašo rėmą. "
+                           "Pakeitimas įsigalios paspaudus „Išsaugoti“."):
+                return
             del self.jigs_list[self.current_jig_idx]
             self.populate_jigs_table()
             self.update_jig_combos()
@@ -2531,8 +2471,8 @@ class ModelsSettingsInterface(QWidget):
             self.settings_updated.emit()
 
             InfoBar.success(
-                title="Išsaugota!",
-                content="Visi nustatymai sėkmingai išsaugoti!",
+                title="Nustatymai išsaugoti",
+                content="Pakeitimai pritaikyti.",
                 orient=Qt.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP_RIGHT,
@@ -2549,37 +2489,85 @@ class ModelsSettingsInterface(QWidget):
 
 
 # ----------------- MAIN FLUENT WINDOW -----------------
-class MainWindow(FluentWindow):
+class TopBar(QFrame):
+    """Balta viršutinė juosta: logotipas ir pavadinimas kairėje, būsena ir piktogramų mygtukai dešinėje."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("topBar")
+        self.setFixedHeight(56)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(24, 0, 16, 0)
+        lay.setSpacing(10)
+
+        logo = QLabel(self)
+        if os.path.exists(ICON_FILE):
+            logo.setPixmap(QPixmap(ICON_FILE).scaled(22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        lay.addWidget(logo)
+        name = QLabel("Podbase Container Studio", self)
+        name.setProperty("role", "appname")
+        lay.addWidget(name)
+        lay.addStretch(1)
+
+        self.status_badge = StatusBadge("Plėtinio ryšys veikia", "success", self)
+        self.status_badge.setToolTip("Naršyklės plėtinys siunčia užsakymus į 127.0.0.1:5000")
+        lay.addWidget(self.status_badge)
+
+        self.lbl_version = CaptionLabel(f"v{CURRENT_VERSION}", self)
+        tabular(self.lbl_version)
+        lay.addSpacing(4)
+        lay.addWidget(self.lbl_version)
+        lay.addSpacing(4)
+
+        self.btn_log = TransparentToolButton(FIF.DOCUMENT, self)
+        self.btn_log.setToolTip("Atidaryti žurnalą")
+        lay.addWidget(self.btn_log)
+
+        self.btn_updates = TransparentToolButton(FIF.SYNC, self)
+        self.btn_updates.setToolTip("Tikrinti atnaujinimus")
+        lay.addWidget(self.btn_updates)
+
+        self.btn_theme = TransparentToolButton(FIF.CONSTRACT, self)
+        self.btn_theme.setToolTip("Šviesi / tamsi tema")
+        lay.addWidget(self.btn_theme)
+
+        self._apply_style()
+        theme_signals.changed.connect(self._apply_style)
+
+    def _apply_style(self):
+        t = tokens()
+        self.setStyleSheet(
+            f"QFrame#topBar {{ background: {t['card']}; border: none; border-bottom: 1px solid {t['divider']}; }}")
+
+
+class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Podbase — Konteinerių Generatorius (v{CURRENT_VERSION})")
+        self.setObjectName("appRoot")
+        self.setWindowTitle(f"Podbase Container Studio (v{CURRENT_VERSION})")
         if os.path.exists(ICON_FILE):
             app_icon = QIcon(ICON_FILE)
             self.setWindowIcon(app_icon)
             QApplication.setWindowIcon(app_icon)
-            
-        self.resize(1180, 760)
+
+        self.resize(1280, 820)
+        self.setMinimumSize(1024, 680)
+        # Paleidus nė vienas laukas neturi fokuso (kitaip pirmasis laukas rodomas su juodu rėmeliu)
+        self.setFocusPolicy(Qt.ClickFocus)
 
         cfg = load_app_config()
-        if cfg.get("theme", "LIGHT") == "DARK":
-            setTheme(Theme.DARK)
-        else:
-            setTheme(Theme.LIGHT)
+        setTheme(Theme.DARK if cfg.get("theme", "LIGHT") == "DARK" else Theme.LIGHT)
 
-        # 0. Initialize Auto-Updater
         self.updater = AppUpdater(self, current_version=CURRENT_VERSION)
 
-        # 1. Studio Tab
         self.studio_interface = ContainerStudioInterface(self)
         self.studio_interface.setObjectName("studioInterface")
 
-        # 2. History Tab
         self.history_interface = HistoryInterface(self)
         self.history_interface.setObjectName("historyInterface")
         self.history_interface.load_order_to_studio.connect(self.on_load_order_to_studio)
         self.studio_interface.container_generated.connect(self.history_interface.reload_history)
 
-        # 3. Settings Tab (with Updater integration)
         self.settings_interface = ModelsSettingsInterface(updater=self.updater, parent=self)
         self.settings_interface.setObjectName("settingsInterface")
         self.settings_interface.settings_updated.connect(self.on_settings_updated)
@@ -2592,7 +2580,7 @@ class MainWindow(FluentWindow):
         self.server_thread.server_failed.connect(self.on_server_failed)
         self.server_thread.start()
 
-        # Periodic 10-minute Auto-Cleanup timer (checks every 30s)
+        # Laikinų aplankų valymas (tikrinama kas 30 s)
         self.cleanup_timer = QTimer(self)
         self.cleanup_timer.setInterval(30000)
         self.cleanup_timer.timeout.connect(self.run_auto_cleanup)
@@ -2622,34 +2610,66 @@ class MainWindow(FluentWindow):
             log.warning(f"[run_auto_cleanup error]: {e}")
 
     def init_navigation(self):
-        self.addSubInterface(
-            self.studio_interface,
-            FIF.DEVELOPER_TOOLS,
-            "Konteinerių Kūrimas",
-            NavigationItemPosition.TOP
-        )
-        self.addSubInterface(
-            self.history_interface,
-            FIF.HISTORY,
-            "Generavimo Istorija",
-            NavigationItemPosition.TOP
-        )
-        self.addSubInterface(
-            self.settings_interface,
-            FIF.SETTING,
-            "Nustatymai ir Tema",
-            NavigationItemPosition.BOTTOM
-        )
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.top_bar = TopBar(self)
+        self.top_bar.btn_log.clicked.connect(self.settings_interface.open_log_file)
+        self.top_bar.btn_updates.clicked.connect(self.settings_interface.on_manual_check_updates)
+        self.top_bar.btn_theme.clicked.connect(self.toggle_theme)
+        root.addWidget(self.top_bar)
+
+        self.tabs_bar = QFrame(self)
+        self.tabs_bar.setObjectName("tabsBar")
+        tabs_l = QHBoxLayout(self.tabs_bar)
+        tabs_l.setContentsMargins(24, 0, 24, 0)
+        self.tabs = UnderlineTabs(self.tabs_bar)
+        tabs_l.addWidget(self.tabs)
+        root.addWidget(self.tabs_bar)
+
+        self.pages = QStackedWidget(self)
+        self.pages.setObjectName("pages")
+        root.addWidget(self.pages, 1)
+
+        self._page_widgets = []
+        for title, page in (("Konteineriai", self.studio_interface),
+                            ("Istorija", self.history_interface),
+                            ("Nustatymai", self.settings_interface)):
+            self.tabs.addTab(title)
+            self.pages.addWidget(page)
+            self._page_widgets.append(page)
+        self.tabs.currentChanged.connect(self.pages.setCurrentIndex)
+
+        self._apply_chrome_style()
+        theme_signals.changed.connect(self._apply_chrome_style)
+
+    def _apply_chrome_style(self):
+        t = tokens()
+        self.tabs_bar.setStyleSheet(
+            f"QFrame#tabsBar {{ background: {t['card']}; border: none; border-bottom: 1px solid {t['border']}; }}")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.setFocus)
+
+    def switchTo(self, widget):
+        if widget in self._page_widgets:
+            idx = self._page_widgets.index(widget)
+            self.pages.setCurrentIndex(idx)
+            self.tabs.setCurrentIndex(idx)
+
+    def toggle_theme(self):
+        mode = "LIGHT" if isDarkTheme() else "DARK"
+        self.settings_interface.on_theme_selected(mode)
+        self.settings_interface.theme_segment.setCurrentItem(mode.lower())
 
     def on_load_order_to_studio(self, entry):
         self.studio_interface.load_from_history_entry(entry)
         self.switchTo(self.studio_interface)
 
     def on_theme_changed(self, theme_mode):
-        if theme_mode == "DARK":
-            setTheme(Theme.DARK)
-        else:
-            setTheme(Theme.LIGHT)
+        setTheme(Theme.DARK if theme_mode == "DARK" else Theme.LIGHT)
         self.studio_interface.update_bed_container_style()
 
     def on_settings_updated(self):
@@ -2658,7 +2678,7 @@ class MainWindow(FluentWindow):
         self.studio_interface.on_model_changed()
 
     def on_server_failed(self, err):
-        self.studio_interface.status_pill.setText("🔴 Port 5000")
+        self.top_bar.status_badge.set_status("error", "Plėtinio ryšys neveikia")
         InfoBar.error(
             title="Naršyklės plėtinio ryšys neveikia",
             content=f"Nepavyko paleisti serverio 5000 prievade ({err}). "
@@ -2788,6 +2808,7 @@ class SingleInstanceGuard:
 
 if __name__ == "__main__":
     install_exception_logging()
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     instance_guard = SingleInstanceGuard()
     if not instance_guard.acquire():
@@ -2801,10 +2822,7 @@ if __name__ == "__main__":
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
     cfg = load_app_config()
-    if cfg.get("theme", "LIGHT") == "DARK":
-        setTheme(Theme.DARK)
-    else:
-        setTheme(Theme.LIGHT)
+    apply_app_theme(app, dark=cfg.get("theme", "LIGHT") == "DARK", font_dir=get_res_path("fonts"))
     w = MainWindow()
     w.show()
     instance_guard.attach_window(w)

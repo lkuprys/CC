@@ -57,7 +57,7 @@ jobs:
 
       - name: Patikrinti sintaksę
         shell: pwsh
-        run: python -m py_compile app_gui.py podbase_core.py api_server.py updater.py package_release.py
+        run: python -m py_compile app_gui.py podbase_core.py api_server.py ui_kit.py updater.py package_release.py
 
       - name: Testai
         shell: pwsh
@@ -71,6 +71,7 @@ jobs:
           python -m PyInstaller --noconfirm --onedir --windowed --name "Podbase_Konteineriai"
           --icon="podbase_icon.ico" --add-data "models.json;." --add-data "jigs.json;."
           --add-data "config.json;." --add-data "podbase_logo.png;." --add-data "podbase_icon.png;."
+          --add-data "fonts;fonts"
           app_gui.py
 
       - name: Sudaryti ZIP

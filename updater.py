@@ -28,17 +28,12 @@ import subprocess
 import urllib.request
 import urllib.error
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QUrl
-from PySide6.QtGui import QIcon, QFont, QColor
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextBrowser,
-    QProgressBar, QSizePolicy, QApplication
-)
+from PySide6.QtCore import QThread, Signal, QObject, QTimer
+from PySide6.QtWidgets import QHBoxLayout, QTextBrowser, QFrame, QApplication
 
-from qfluentwidgets import (
-    MessageBoxBase, SubtitleLabel, BodyLabel, CaptionLabel,
-    PrimaryPushButton, PushButton, ProgressBar, InfoBar,
-    InfoBarPosition, isDarkTheme, FluentIcon as FIF
+from ui_kit import (
+    MessageBoxBase, SubtitleLabel, SecondaryLabel, CaptionLabel, FieldLabel, ProgressBar, InfoBar,
+    InfoBarPosition, StatusBadge, tabular
 )
 
 CURRENT_VERSION = "1.1.3"
@@ -382,94 +377,36 @@ class UpdateConfirmDialog(MessageBoxBase):
         self.init_ui()
 
     def init_ui(self):
-        dark = isDarkTheme()
         self.widget.setMinimumWidth(480)
         self.widget.setMaximumWidth(560)
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
-
-        title_box = QHBoxLayout()
-        title_box.setSpacing(8)
-
-        lbl_icon = QLabel("🚀", self)
-        lbl_icon.setStyleSheet("font-size: 26px;")
-        title_box.addWidget(lbl_icon)
-
-        title_lbl = SubtitleLabel("Rastas naujas programos atnaujinimas!", self)
-        title_lbl.setStyleSheet("font-size: 18px; font-weight: 800; color: #10b981;")
-        title_box.addWidget(title_lbl, 1)
-        layout.addLayout(title_box)
+        self.viewLayout.addWidget(SubtitleLabel("Yra nauja programos versija", self.widget))
 
         ver_box = QHBoxLayout()
-        ver_box.setSpacing(10)
-
-        old_badge = QLabel(f"Dabartinė: v{self.current_version}", self)
-        old_badge.setStyleSheet(f"""
-            background: {'#334155' if dark else '#e2e8f0'};
-            color: {'#94a3b8' if dark else '#64748b'};
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-weight: 700;
-            font-size: 12px;
-        """)
-        ver_box.addWidget(old_badge)
-
-        arrow_lbl = QLabel("➔", self)
-        arrow_lbl.setStyleSheet("color: #10b981; font-weight: 900; font-size: 14px;")
-        ver_box.addWidget(arrow_lbl)
-
-        new_badge = QLabel(f"Nauja: v{self.release_info.get('version', '')}", self)
-        new_badge.setStyleSheet("""
-            background: #10b981;
-            color: #ffffff;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-weight: 800;
-            font-size: 12px;
-        """)
-        ver_box.addWidget(new_badge)
+        ver_box.setSpacing(8)
+        ver_box.addWidget(StatusBadge(f"Dabartinė v{self.current_version}", "neutral", self.widget, dot=False))
+        arrow = CaptionLabel("→", self.widget)
+        ver_box.addWidget(arrow)
+        ver_box.addWidget(StatusBadge(f"Nauja v{self.release_info.get('version', '')}", "success", self.widget))
         ver_box.addStretch(1)
+        self.viewLayout.addLayout(ver_box)
 
-        layout.addLayout(ver_box)
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addWidget(FieldLabel("Kas naujo", self.widget))
 
-        layout.addWidget(BodyLabel("Pakeitimų ir naujovių sąrašas (Changelog):", self))
-
-        self.changelog_browser = QTextBrowser(self)
-        self.changelog_browser.setFixedHeight(140)
+        self.changelog_browser = QTextBrowser(self.widget)
+        self.changelog_browser.setProperty("field", True)
+        self.changelog_browser.setFixedHeight(160)
+        self.changelog_browser.setFrameShape(QFrame.NoFrame)
         self.changelog_browser.setPlainText(self.release_info.get("changelog", ""))
-        self.changelog_browser.setStyleSheet(f"""
-            QTextBrowser {{
-                background: {'#0f172a' if dark else '#f8fafc'};
-                color: {'#f1f5f9' if dark else '#1e293b'};
-                border: 1px solid {'#334155' if dark else '#cbd5e1'};
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 12px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-        """)
-        layout.addWidget(self.changelog_browser)
+        self.viewLayout.addWidget(self.changelog_browser)
 
-        prompt_lbl = BodyLabel("Ar norite atnaujinti programą dabar?", self)
-        prompt_lbl.setStyleSheet("font-weight: bold; margin-top: 4px;")
-        layout.addWidget(prompt_lbl)
+        note = SecondaryLabel("Programa atsisiųs atnaujinimą ir persikraus. Nustatymai ir istorija išliks.", self.widget)
+        note.setWordWrap(True)
+        self.viewLayout.addWidget(note)
 
-        self.viewLayout.addLayout(layout)
-
-        self.yesButton.setText("⬇️  Taip, atnaujinti dabar")
-        self.yesButton.setStyleSheet("""
-            PrimaryPushButton {
-                background: #10b981;
-                border: 1px solid #059669;
-                font-weight: 800;
-            }
-            PrimaryPushButton:hover {
-                background: #059669;
-            }
-        """)
-        self.cancelButton.setText("⏰ Priminti vėliau")
+        self.yesButton.setText("Atnaujinti dabar")
+        self.cancelButton.setText("Priminti vėliau")
 
 
 # ----------------- ATSISIUNTIMO PROGRESO DIALOGAS -----------------
@@ -481,24 +418,17 @@ class DownloadProgressDialog(MessageBoxBase):
 
     def init_ui(self):
         self.widget.setMinimumWidth(440)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(12)
 
-        self.lbl_title = SubtitleLabel("Siunčiamas programos atnaujinimas...", self)
-        self.lbl_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #10b981;")
-        layout.addWidget(self.lbl_title)
+        self.lbl_title = SubtitleLabel("Atsisiunčiamas atnaujinimas", self.widget)
+        self.viewLayout.addWidget(self.lbl_title)
 
-        self.progress_bar = ProgressBar(self)
-        self.progress_bar.setFixedHeight(16)
+        self.progress_bar = ProgressBar(self.widget)
         self.progress_bar.setValue(0)
-        layout.addWidget(self.progress_bar)
+        self.viewLayout.addWidget(self.progress_bar)
 
-        self.lbl_status = CaptionLabel("Pradedamas siuntimas...", self)
-        self.lbl_status.setStyleSheet("font-size: 12px; color: #64748b;")
-        layout.addWidget(self.lbl_status)
-
-        self.viewLayout.addLayout(layout)
+        self.lbl_status = SecondaryLabel("Pradedama…", self.widget)
+        tabular(self.lbl_status)
+        self.viewLayout.addWidget(self.lbl_status)
 
         self.yesButton.hide()
         self.cancelButton.setText("Atšaukti")
@@ -878,7 +808,7 @@ class AppUpdater(QObject):
         def on_download_finished(dest_path):
             prog_dlg.accept()
             InfoBar.success(
-                title="Atsisiųsta!",
+                title="Atsisiųsta",
                 content="Programa atsinaujina ir netrukus persikraus...",
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=3000,
