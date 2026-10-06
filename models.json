@@ -94,7 +94,11 @@
     "source": "\\\\192.168.1.143\\podbase-hotfolder\\BENDRAS_PODBASE_HOTFOLDER",
     "destination": "C:/ProgramData/ColorGATE Software/Productionserver23/HotDir/Pod_Kindle",
     "aliases": [
-      "Kindle 5 Kindle 6"
+      "Kindle 5/6",
+      "Kindle 5",
+      "Kindle 6",
+      "Paperwhite 5",
+      "Paperwhite 6"
     ],
     "jig_id": "jig_1788183155",
     "output_mode": "direct_hotfolder"

@@ -91,7 +91,13 @@ const KOLOSUS_MAPPING = [
   // ==================== SLEEVES ====================
   { match: /Laptop\s+Sleeve\s+16/i, template: 'Sleeve 16"' },
   { match: /Laptop\s+Sleeve\s+14/i, template: 'Sleeve 14"' },
-  { match: /Laptop\s+Sleeve\s+13/i, template: 'Sleeve 13"' }
+  { match: /Laptop\s+Sleeve\s+13/i, template: 'Sleeve 13"' },
+
+  // ==================== KINDLE ====================
+  // Abu modeliai spausdinami tame pačiame rėme, todėl šablonas bendras – sutampa su modeliu „Kindle 5/6“ programoje
+  { match: /Paperwhite\s*6\b/i, template: 'Kindle 5/6' },
+  { match: /Paperwhite\s*5\b/i, template: 'Kindle 5/6' },
+  { match: /Kindle\s+(?:Paperwhite\s+)?[56]\b/i, template: 'Kindle 5/6' }
 ];
 
 // Puslapio tekstas įterpiamas į HTML tik išvalytas (kitaip produkto pavadinime esantis
