@@ -36,7 +36,7 @@ from ui_kit import (
     InfoBarPosition, StatusBadge, tabular
 )
 
-CURRENT_VERSION = "1.2.2"
+CURRENT_VERSION = "1.2.3"
 DEFAULT_GITHUB_REPO = "lkuprys/CC"
 
 # Release ZIP pavadinimas, kurį sukuria package_release.py
