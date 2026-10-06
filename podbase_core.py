@@ -12,6 +12,8 @@ import re
 import json
 import time
 import shutil
+import struct
+import zlib
 import logging
 import threading
 from datetime import datetime
@@ -381,6 +383,177 @@ def scan_print_files_recursive(search_roots):
 
     return scanned_files
 
+# ----------------- TUŠČIAS (PERMATOMAS) LIZDAS -----------------
+# Specialus plano elementas: vietoj spaudos failo sukuriamas visiškai permatomas PNG,
+# kurio dydis ir DPI sutampa su kitu to paties stalo failu – ColorGATE tą vietą praleidžia.
+BLANK_TOKEN = "__TUSCIAS_LIZDAS__"
+BLANK_LABEL = "Tuščias lizdas"
+
+
+def plan_item_name(item):
+    """Stalo elementas (dict) → plano elemento pavadinimas (tuščiam lizdui – BLANK_TOKEN)."""
+    if isinstance(item, dict) and item.get("blank"):
+        return BLANK_TOKEN
+    return (item or {}).get("name", "") if isinstance(item, dict) else str(item or "")
+
+
+def read_image_info(path):
+    """
+    (plotis, aukštis, dpi_x, dpi_y) iš failo antraštės, viso failo nedekoduojant.
+    DPI None, jei faile nenurodytas. Grąžina None, jei formatas neatpažintas.
+    """
+    with open(path, "rb") as f:
+        head = f.read(32)
+        if head.startswith(b"\x89PNG\r\n\x1a\n"):
+            return _png_info(f)
+        if head[:4] in (b"II*\x00", b"MM\x00*"):
+            return _tiff_info(f, head[:2])
+        if head[:2] == b"\xff\xd8":
+            return _jpeg_info(f)
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            return _webp_info(head, f)
+    return None
+
+
+def _png_info(f):
+    f.seek(8)
+    w = h = None
+    dpi = (None, None)
+    while True:
+        hdr = f.read(8)
+        if len(hdr) < 8:
+            break
+        length, ctype = struct.unpack(">I4s", hdr)
+        if ctype == b"IHDR":
+            w, h = struct.unpack(">II", f.read(8))
+            f.seek(length - 8 + 4, 1)
+        elif ctype == b"pHYs":
+            px, py, unit = struct.unpack(">IIB", f.read(9))
+            if unit == 1:
+                dpi = (px * 0.0254, py * 0.0254)
+            f.seek(4, 1)
+        elif ctype in (b"IDAT", b"IEND"):
+            break
+        else:
+            f.seek(length + 4, 1)
+    return (w, h, dpi[0], dpi[1]) if w and h else None
+
+
+def _tiff_info(f, order):
+    e = "<" if order == b"II" else ">"
+    f.seek(4)
+    (ifd,) = struct.unpack(e + "I", f.read(4))
+    f.seek(ifd)
+    (n,) = struct.unpack(e + "H", f.read(2))
+    tags = {}
+    for _ in range(n):
+        tag, typ, count, value = struct.unpack(e + "HHI4s", f.read(12))
+        tags[tag] = (typ, count, value)
+
+    def num(tag):
+        if tag not in tags:
+            return None
+        typ, _count, raw = tags[tag]
+        if typ == 3:   # SHORT
+            return struct.unpack(e + "H", raw[:2])[0]
+        if typ == 4:   # LONG
+            return struct.unpack(e + "I", raw)[0]
+        if typ == 5:   # RATIONAL – reikšmė toliau faile
+            pos = f.tell()
+            f.seek(struct.unpack(e + "I", raw)[0])
+            a, b = struct.unpack(e + "II", f.read(8))
+            f.seek(pos)
+            return a / b if b else None
+        return None
+
+    w, h = num(256), num(257)
+    xr, yr, unit = num(282), num(283), num(296) or 2
+    factor = 2.54 if unit == 3 else 1.0
+    if unit == 1:   # be matavimo vieneto
+        xr = yr = None
+    dpi_x = xr * factor if xr else None
+    dpi_y = yr * factor if yr else None
+    return (w, h, dpi_x, dpi_y) if w and h else None
+
+
+def _jpeg_info(f):
+    f.seek(2)
+    dpi = (None, None)
+    while True:
+        b = f.read(1)
+        while b and b != b"\xff":
+            b = f.read(1)
+        while b == b"\xff":
+            b = f.read(1)
+        if not b:
+            return None
+        marker = b[0]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            continue
+        (length,) = struct.unpack(">H", f.read(2))
+        data_start = f.tell()
+        if marker == 0xE0:
+            data = f.read(min(length - 2, 14))
+            if data[:5] == b"JFIF\x00" and len(data) >= 12:
+                unit, dx, dy = struct.unpack(">BHH", data[7:12])
+                if unit == 1:
+                    dpi = (float(dx), float(dy))
+                elif unit == 2:
+                    dpi = (dx * 2.54, dy * 2.54)
+        elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            _p, h, w = struct.unpack(">BHH", f.read(5))
+            return (w, h, dpi[0], dpi[1])
+        f.seek(data_start + length - 2)
+
+
+def _webp_info(head, f):
+    chunk = head[12:16]
+    if chunk == b"VP8X":
+        f.seek(24)
+        d = f.read(6)
+        w = 1 + int.from_bytes(d[0:3], "little")
+        h = 1 + int.from_bytes(d[3:6], "little")
+        return (w, h, None, None)
+    if chunk == b"VP8 ":
+        f.seek(26)
+        w, h = struct.unpack("<HH", f.read(4))
+        return (w & 0x3FFF, h & 0x3FFF, None, None)
+    if chunk == b"VP8L":
+        f.seek(21)
+        b = f.read(4)
+        bits = int.from_bytes(b, "little")
+        return ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1, None, None)
+    return None
+
+
+def write_blank_png(path, width, height, dpi_x=None, dpi_y=None):
+    """Visiškai permatomas RGBA PNG. Nuliai suspaudžiami labai gerai, todėl failas mažas net dideliems matmenims."""
+    def chunk(ctype, data):
+        return struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", zlib.crc32(ctype + data) & 0xFFFFFFFF)
+
+    comp = zlib.compressobj(9)
+    row = b"\x00" * (1 + 4 * width)      # filtro baitas + RGBA nuliai
+    rows_per_block = max(1, (4 * 1024 * 1024) // len(row))
+    idat = bytearray()
+    remaining = height
+    while remaining > 0:
+        n = min(rows_per_block, remaining)
+        idat += comp.compress(row * n)
+        remaining -= n
+    idat += comp.flush()
+
+    out = bytearray(b"\x89PNG\r\n\x1a\n")
+    out += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    if dpi_x and dpi_y:
+        out += chunk(b"pHYs", struct.pack(">IIB", round(dpi_x / 0.0254), round(dpi_y / 0.0254), 1))
+    out += chunk(b"IDAT", bytes(idat))
+    out += chunk(b"IEND", b"")
+    tmp = path + ".part"
+    with open(tmp, "wb") as fh:
+        fh.write(out)
+    os.replace(tmp, path)
+
+
 def find_matching_file_for_design(design_name, scanned_files):
     """Geriausiai tinkančio failo kelias arba None."""
     candidates = find_matching_candidates(design_name, scanned_files)
@@ -622,7 +795,7 @@ def _run_container_job(plan, progress=None):
 
     # found: [(stalas, vieta, pavadinimas, kelias, mtime)], warnings: tekstai operatoriui
     result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": [],
-              "found": [], "warnings": [], "ambiguous": []}
+              "found": [], "warnings": [], "ambiguous": [], "blanks": []}
 
     report("Tikrinami paieškos aplankai...")
     search_roots = build_search_roots(plan.get("source_dir", ""))
@@ -631,7 +804,7 @@ def _run_container_job(plan, progress=None):
     def match_all(scanned):
         return {
             (b["bed_idx"], i): find_matching_candidates(name, scanned)
-            for b in plan["beds"] for i, name in enumerate(b["items"])
+            for b in plan["beds"] for i, name in enumerate(b["items"]) if name != BLANK_TOKEN
         }
 
     # Tik modeliui priskirti failų tipai (pvz. MacBook – tik TIF)
@@ -648,6 +821,14 @@ def _run_container_job(plan, progress=None):
         scanned, _ = get_scanned_files(search_roots, force=True)
         candidates_by_slot = match_all(only_allowed(scanned))
     matches = {k: (c[0][2] if c else None) for k, c in candidates_by_slot.items()}
+
+    # Tuščių lizdų dydis: pirmas rastas to paties stalo failas (jei nėra – bet kurio stalo)
+    blank_ref = {}
+    any_found = next((p for p in matches.values() if p), None)
+    for b in plan["beds"]:
+        if BLANK_TOKEN in b["items"]:
+            same_bed = [matches.get((b["bed_idx"], i)) for i, n in enumerate(b["items"]) if n != BLANK_TOKEN]
+            blank_ref[b["bed_idx"]] = next((p for p in same_bed if p), None) or any_found
 
     for b in plan["beds"]:
         for i, name in enumerate(b["items"]):
@@ -667,7 +848,7 @@ def _run_container_job(plan, progress=None):
     if is_hot:
         os.makedirs(dest_dir, exist_ok=True)
 
-    total = len(matches)
+    total = sum(len(b["items"]) for b in plan["beds"])
     done = 0
     used_titles = set()
     for b in plan["beds"]:
@@ -706,6 +887,25 @@ def _run_container_job(plan, progress=None):
             report(f"Kopijuojama {done} iš {total}...", done, total)
             num_prefix = f"{i + 1:02d}"
             custom_name = title if i == 0 and title else None
+            if name == BLANK_TOKEN:
+                ref = blank_ref.get(b["bed_idx"])
+                try:
+                    info = read_image_info(ref) if ref else None
+                    if not info:
+                        raise ValueError("nėra rasto failo, pagal kurį nustatyti dydį")
+                    w, h, dx, dy = info
+                    dst_name = f"{num_prefix}_{safe_folder_name(custom_name, 'TUSCIAS') if custom_name else 'TUSCIAS'}.png"
+                    dst_path = os.path.join(target_dir, dst_name)
+                    if is_hot:
+                        dst_path = unique_destination(dst_path)
+                    write_blank_png(dst_path, w, h, dx, dy)
+                    result["copied"] += 1
+                    result["blanks"].append((b["bed_idx"], i, w, h, dx, dy))
+                except Exception as e:
+                    result["errors"].append(f"Tuščias lizdas (stalas {b['bed_idx'] + 1}, vieta {i + 1}): {e}")
+                    result["missing"].append((b["bed_idx"], i, BLANK_LABEL))
+                continue
+
             found = matches.get((b["bed_idx"], i))
 
             if found:

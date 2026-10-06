@@ -21,8 +21,8 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-from PySide6.QtCore import Qt, QThread, QThreadPool, QRunnable, QLockFile, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
-from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QImage, QImageReader, QDrag, QCursor
+from PySide6.QtCore import Qt, QRectF, QThread, QThreadPool, QRunnable, QLockFile, Signal, QObject, QTimer, QSize, QUrl, QByteArray, QMimeData, QPoint
+from PySide6.QtGui import QIcon, QPixmap, QFont, QColor, QPainter, QPainterPath, QPen, QImage, QImageReader, QDrag, QCursor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFrame, QSizePolicy, QFileDialog, QSpacerItem, QTableWidgetItem,
@@ -44,7 +44,7 @@ from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_C
 
 from podbase_core import (
     BASE_DIR, DESKTOP_DIR, ICON_FILE, get_res_path, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
-    get_cleanup_expiry_seconds, prefetch_scanned_files, FILE_TYPE_GROUPS,
+    get_cleanup_expiry_seconds, prefetch_scanned_files, FILE_TYPE_GROUPS, plan_item_name, BLANK_LABEL,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
@@ -194,6 +194,28 @@ class ContainerJobWorker(QThread):
         self.finished_ok.emit(res)
 
 
+def blank_slot_pixmap(width, height):
+    """Šachmatinis raštas – įprastas „permatomo“ vaizdo ženklas."""
+    t = tokens()
+    pix = QPixmap(width, height)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0.5, 0.5, width - 1, height - 1), 12, 12)
+    p.setClipPath(path)
+    cell = 8
+    for y in range(0, height, cell):
+        for x in range(0, width, cell):
+            p.fillRect(x, y, cell, cell, QColor(t["fill"] if (x // cell + y // cell) % 2 else t["card"]))
+    p.setClipping(False)
+    p.setPen(QPen(QColor(t["strong"]), 1))
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(path)
+    p.end()
+    return pix
+
+
 # ----------------- RESPONSIVE UV SLOT CARD WITH FLUID DRAG & DROP & ANIMATION -----------------
 class UVSlotWidget(QFrame):
     slot_cleared = Signal(int)
@@ -218,6 +240,7 @@ class UVSlotWidget(QFrame):
 
         # Paskutinio generavimo žyma: None, "error" (failas nerastas) arba "warning" (keli kandidatai)
         self.mark = None
+        self.is_blank = False      # tuščias (permatomas) lizdas
         self.is_blinking = False   # suderinamumui: True, kai lizdas pažymėtas kaip nerastas
         self.drag_over = False
 
@@ -310,6 +333,9 @@ class UVSlotWidget(QFrame):
         elif occupied and self.mark in ("error", "warning"):
             fg, bg, _ = status_colors(self.mark)
             border, border_style, hover_border = fg, "solid", fg
+        elif occupied and self.is_blank:
+            fg, bg = t["muted"], t["card"]
+            border, border_style, hover_border = t["strong"], "dashed", t["muted"]
         elif occupied:
             fg, bg = t["text"], t["card"]
             border, border_style, hover_border = t["border"], "solid", t["strong"]
@@ -336,7 +362,8 @@ class UVSlotWidget(QFrame):
             self.badge.setStyleSheet(
                 f"background: {t['fill']}; color: {t['secondary']}; border-radius: 10px; padding: 0 8px; "
                 f"font-size: 11px; font-weight: 600;")
-            self.title_label.setStyleSheet(f"color: {t['text']}; font-size: 12px; font-weight: 600;")
+            title_color = t["muted"] if self.is_blank else t["text"]
+            self.title_label.setStyleSheet(f"color: {title_color}; font-size: 12px; font-weight: 600;")
         else:
             self.badge.setText(num)
             self.badge.setStyleSheet(
@@ -356,8 +383,9 @@ class UVSlotWidget(QFrame):
             self.set_mark("warning")
         self.setToolTip(tip)
 
-    def set_data(self, name, url="", item_idx=None):
+    def set_data(self, name, url="", item_idx=None, blank=False):
         self.mark = None
+        self.is_blank = bool(blank)
         self.is_blinking = False
         self.setToolTip("")
         if self.current_reply:
@@ -381,7 +409,11 @@ class UVSlotWidget(QFrame):
         self.thumb_label.clear()
         self.thumb_label.setPixmap(QPixmap())
 
-        if self.design_url:
+        if self.is_blank:
+            self.thumb_label.setPixmap(blank_slot_pixmap(thumb_dim, int(thumb_dim * 0.7)))
+            self.setToolTip("Tuščias lizdas: sukuriamas permatomas PNG, tokio pat dydžio ir DPI kaip kiti šio "
+                            "stalo failai. ColorGATE šią vietą praleidžia.")
+        elif self.design_url:
             cached = _thumb_cache_get(self.design_url, thumb_dim)
             is_remote = self.design_url.lower().startswith(("http://", "https://", "data:"))
             if cached is not None:
@@ -410,6 +442,7 @@ class UVSlotWidget(QFrame):
 
     def set_empty(self, placeholder_num=None):
         self.mark = None
+        self.is_blank = False
         self.is_blinking = False
         self.setToolTip("")
         if self.current_reply:
@@ -658,6 +691,13 @@ class ContainerStudioInterface(QWidget):
         self.btn_add_slot.clicked.connect(self.add_manual_design)
         bed_nav_layout.addWidget(self.btn_add_slot)
 
+        self.btn_add_blank = PushButton(FIF.TRANSPARENT, "Tuščias lizdas", self)
+        self.btn_add_blank.setFixedHeight(32)
+        self.btn_add_blank.setToolTip("Prideda permatomą lizdą, kad ColorGATE šią vietą praleistų. "
+                                      "Nutempkite jį į reikiamą vietą.")
+        self.btn_add_blank.clicked.connect(self.add_blank_slot)
+        bed_nav_layout.addWidget(self.btn_add_blank)
+
         self.btn_reverse = PushButton(FIF.SYNC, "Apversti tvarką", self)
         self.btn_reverse.setFixedHeight(32)
         self.btn_reverse.clicked.connect(self.reverse_slots_order)
@@ -888,7 +928,7 @@ class ContainerStudioInterface(QWidget):
 
             if 0 <= r < len(self.grid_slots) and 0 <= c < len(self.grid_slots[r]):
                 slot_w = self.grid_slots[r][c]
-                slot_w.set_data(it.get("name", ""), it.get("url", ""), item_idx=i)
+                slot_w.set_data(it.get("name", ""), it.get("url", ""), item_idx=i, blank=it.get("blank", False))
                 if i in missing_indices:
                     slot_w.start_blinking()
                 else:
@@ -1070,6 +1110,15 @@ class ContainerStudioInterface(QWidget):
             self.add_new_bed()
             self.beds[self.current_bed_index].append({"name": "PID-1001", "url": ""})
             self.render_current_bed()
+
+    def add_blank_slot(self):
+        """Permatomas lizdas: generuojant sukuriamas tuščias PNG (tokio pat dydžio kaip kiti stalo failai)."""
+        self._clear_job_marks()
+        item = {"name": BLANK_LABEL, "url": "", "blank": True}
+        if len(self.beds[self.current_bed_index]) >= self.get_active_jig_capacity():
+            self.add_new_bed()
+        self.beds[self.current_bed_index].append(item)
+        self.render_current_bed()
 
     def clear_current_bed(self):
         if self.beds[self.current_bed_index] and not confirm(
@@ -1263,7 +1312,7 @@ class ContainerStudioInterface(QWidget):
             beds_plan.append({
                 "bed_idx": real_bed_idx,
                 "title": clean_bed_title,
-                "items": [it.get("name", "") for it in occupied_items]
+                "items": [plan_item_name(it) for it in occupied_items]
             })
 
         plan = {
@@ -1617,7 +1666,9 @@ class HistoryInterface(QWidget):
                 for s_idx, d in enumerate(bed_items):
                     if d:
                         row_lbl = QLabel(
-                            f"<span style='color:{tokens()['muted']}'>{s_idx + 1:02d}</span>&nbsp;&nbsp;{d.get('name')}",
+                            f"<span style='color:{tokens()['muted']}'>{s_idx + 1:02d}</span>&nbsp;&nbsp;"
+                            + (f"<span style='color:{tokens()['muted']}'>{BLANK_LABEL}</span>" if d.get("blank")
+                               else str(d.get('name'))),
                             self.preview_container)
                         row_lbl.setStyleSheet("font-size: 13px; padding: 2px 0;")
                         self.preview_layout.addWidget(row_lbl)
@@ -1675,7 +1726,7 @@ class HistoryInterface(QWidget):
             beds_plan.append({
                 "bed_idx": real_bed_idx,
                 "title": clean_bed_title,
-                "items": [x.get("name", "") for x in occupied_items]
+                "items": [plan_item_name(x) for x in occupied_items]
             })
 
         plan = {

@@ -121,3 +121,30 @@ def test_extensions_for_types(core):
     assert core.extensions_for_types(["tif"]) == {".tif", ".tiff"}
     assert core.extensions_for_types(["JPG", ".png"]) == {".jpg", ".jpeg", ".png"}
     assert core.extensions_for_types([]) == core.SUPPORTED_IMAGE_EXTENSIONS
+
+
+def test_blank_slot_gets_size_and_dpi_of_bed_file(core, tmp_path):
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    # „Spaudos failai“: tikri PNG su žinomu dydžiu ir DPI
+    core.write_blank_png(str(src / "1001_a.png"), 120, 80, 300, 300)
+    core.write_blank_png(str(src / "1002_a.png"), 120, 80, 300, 300)
+    res = core.run_container_job(plan(src, out, [("T", ["PID-1001", core.BLANK_TOKEN, "PID-1002"])]))
+    files = sorted(os.listdir(out / "T"))
+    assert files == ["01_T.png", "02_TUSCIAS.png", "03_PID-1002.png"]
+    w, h, dx, dy = core.read_image_info(str(out / "T" / "02_TUSCIAS.png"))
+    assert (w, h) == (120, 80) and round(dx) == 300 and round(dy) == 300
+    assert res["missing"] == [] and res["copied"] == 3 and len(res["blanks"]) == 1
+
+
+def test_blank_slot_without_reference_is_reported(core, tmp_path):
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    res = core.run_container_job(plan(src, out, [("T", [core.BLANK_TOKEN])]))
+    assert res["missing"] == [(0, 0, core.BLANK_LABEL)]
+    assert any("Tuščias lizdas" in e for e in res["errors"])
+
+
+def test_plan_item_name(core):
+    assert core.plan_item_name({"name": "Tuščias lizdas", "blank": True}) == core.BLANK_TOKEN
+    assert core.plan_item_name({"name": "PID-1"}) == "PID-1"
