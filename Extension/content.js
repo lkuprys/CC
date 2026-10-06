@@ -94,10 +94,12 @@ const KOLOSUS_MAPPING = [
   { match: /Laptop\s+Sleeve\s+13/i, template: 'Sleeve 13"' },
 
   // ==================== KINDLE ====================
-  // Abu modeliai spausdinami tame pačiame rėme, todėl šablonas bendras – sutampa su modeliu „Kindle 5/6“ programoje
-  { match: /Paperwhite\s*6\b/i, template: 'Kindle 5/6' },
-  { match: /Paperwhite\s*5\b/i, template: 'Kindle 5/6' },
-  { match: /Kindle\s+(?:Paperwhite\s+)?[56]\b/i, template: 'Kindle 5/6' }
+  // Puslapyje rodoma „Kindle 5“ / „Kindle 6“, bet programai siunčiamas bendras modelis „Kindle 5/6“
+  // (abu spausdinami tame pačiame rėme)
+  { match: /Paperwhite\s*6\b/i, template: 'Kindle 6', model: 'Kindle 5/6' },
+  { match: /Paperwhite\s*5\b/i, template: 'Kindle 5', model: 'Kindle 5/6' },
+  { match: /Kindle\s+(?:Paperwhite\s+)?6\b/i, template: 'Kindle 6', model: 'Kindle 5/6' },
+  { match: /Kindle\s+(?:Paperwhite\s+)?5\b/i, template: 'Kindle 5', model: 'Kindle 5/6' }
 ];
 
 // Puslapio tekstas įterpiamas į HTML tik išvalytas (kitaip produkto pavadinime esantis
@@ -465,7 +467,8 @@ function collectAndSendDesigns() {
   let detectedModel = null;
   for (const rule of KOLOSUS_MAPPING) {
     if (rule.match.test(contextText)) {
-      detectedModel = rule.template;
+      // model – kaip modelis vadinamas programoje (jei skiriasi nuo puslapyje rodomo pavadinimo)
+      detectedModel = rule.model || rule.template;
       break;
     }
   }
