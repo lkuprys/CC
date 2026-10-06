@@ -251,6 +251,22 @@ def perform_temp_folders_cleanup():
 
 # ----------------- RECURSIVE MULTI-ROOT PRINT FILE SCANNER -----------------
 SUPPORTED_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'}
+
+# Failų tipai, kuriuos galima pasirinkti modelio nustatymuose (raktas → plėtiniai)
+FILE_TYPE_GROUPS = {
+    "png": (".png",),
+    "jpg": (".jpg", ".jpeg"),
+    "webp": (".webp",),
+    "tif": (".tif", ".tiff"),
+}
+
+
+def extensions_for_types(file_types):
+    """Modelio failų tipai (pvz. ["tif"]) → plėtinių aibė. Tuščias sąrašas = visi palaikomi tipai."""
+    exts = set()
+    for t in file_types or []:
+        exts.update(FILE_TYPE_GROUPS.get(str(t).lower().lstrip("."), ()))
+    return exts or set(SUPPORTED_IMAGE_EXTENSIONS)
 IGNORED_FOLDER_NAMES = {'batch sheet', 'batchsheet', 'trash', 'done', 'archived', 'temp', 'tmp', '__pycache__'}
 IGNORED_FILE_KEYWORDS = {'batch sheet', 'batchsheet', 'thumbs.db', '.ds_store'}
 
@@ -595,7 +611,7 @@ def _run_container_job(plan, progress=None):
     Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
 
     plan = {
-        "source_dir": str, "dest_dir": str, "hotfolder": bool,
+        "source_dir": str, "dest_dir": str, "hotfolder": bool, "file_types": ["tif", ...] (nebūtina),
         "beds": [{"bed_idx": int, "title": str, "items": [dizaino pavadinimas, ...]}]
     }
     Grąžina {"copied", "missing": [(bed_idx, item_idx, name)], "errors", "folders", "search_roots"}.
@@ -618,13 +634,19 @@ def _run_container_job(plan, progress=None):
             for b in plan["beds"] for i, name in enumerate(b["items"])
         }
 
+    # Tik modeliui priskirti failų tipai (pvz. MacBook – tik TIF)
+    allowed_exts = extensions_for_types(plan.get("file_types"))
+
+    def only_allowed(files):
+        return [f for f in files if os.path.splitext(f["fname_lower"])[1] in allowed_exts]
+
     report("Ieškoma spaudos failų...")
     scanned, from_cache = get_scanned_files(search_roots)
-    candidates_by_slot = match_all(scanned)
+    candidates_by_slot = match_all(only_allowed(scanned))
     if from_cache and any(not c or not os.path.exists(c[0][2]) for c in candidates_by_slot.values()):
         report("Atnaujinamas failų sąrašas...")
         scanned, _ = get_scanned_files(search_roots, force=True)
-        candidates_by_slot = match_all(scanned)
+        candidates_by_slot = match_all(only_allowed(scanned))
     matches = {k: (c[0][2] if c else None) for k, c in candidates_by_slot.items()}
 
     for b in plan["beds"]:

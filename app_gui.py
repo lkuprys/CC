@@ -35,7 +35,7 @@ from ui_kit import (
     PrimaryPushButton, PushButton, SuccessPushButton, DangerPushButton, GhostPushButton, ToolButton,
     TransparentToolButton, ComboBox, LineEdit, SearchLineEdit, SpinBox, CardWidget, CheckBox,
     InfoBar, InfoBarPosition, ProgressBar, FIF, setTheme, Theme, isDarkTheme, SmoothScrollArea,
-    StatusBadge, TableWidget, SegmentedWidget, UnderlineTabs, Notice, MessageBoxBase, confirm, divider,
+    StatusBadge, TableWidget, SegmentedWidget, UnderlineTabs, ChipGroup, Notice, MessageBoxBase, confirm, divider,
     tokens, status_colors, tabular, theme_signals, apply_app_theme, icon as tinted_icon,
 )
 
@@ -44,7 +44,7 @@ from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_C
 
 from podbase_core import (
     BASE_DIR, DESKTOP_DIR, ICON_FILE, get_res_path, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
-    get_cleanup_expiry_seconds, prefetch_scanned_files,
+    get_cleanup_expiry_seconds, prefetch_scanned_files, FILE_TYPE_GROUPS,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
@@ -1238,6 +1238,7 @@ class ContainerStudioInterface(QWidget):
         source_dir = m_data.get("source", "").strip()
         dest_dir = m_data.get("destination", "").strip()
         output_mode = m_data.get("output_mode", "temp_folder")
+        file_types = m_data.get("file_types") or []
         is_direct_hotfolder = (output_mode == "direct_hotfolder")
 
         if is_direct_hotfolder and not dest_dir:
@@ -1269,6 +1270,7 @@ class ContainerStudioInterface(QWidget):
             "source_dir": source_dir,
             "dest_dir": dest_dir,
             "hotfolder": is_direct_hotfolder,
+            "file_types": file_types,
             "beds": beds_plan
         }
 
@@ -1290,7 +1292,8 @@ class ContainerStudioInterface(QWidget):
                 "total_designs": sum(len(items) for _, items in valid_beds),
                 "beds": copy.deepcopy(self.beds),
                 "source_dir": source_dir,
-                "dest_dir": dest_dir
+                "dest_dir": dest_dir,
+                "file_types": file_types
             }
         }
 
@@ -1377,7 +1380,7 @@ class ContainerStudioInterface(QWidget):
                 orient=Qt.Vertical,
                 isClosable=True,
                 position=InfoBarPosition.BOTTOM_RIGHT,
-                duration=-1,
+                duration=10000,
                 parent=self
             )
 
@@ -1643,6 +1646,8 @@ class HistoryInterface(QWidget):
         beds = it.get("beds", [])
         bed_names = it.get("bed_names", [])
         is_direct_hotfolder = (it.get("output_mode", "temp_folder") == "direct_hotfolder")
+        model = next((m for m in load_models_data() if m.get("name") == it.get("model_name")), {})
+        file_types = (model.get("file_types") if "file_types" in model else it.get("file_types")) or []
 
         if is_direct_hotfolder and not dest_dir:
             InfoBar.error(
@@ -1677,6 +1682,7 @@ class HistoryInterface(QWidget):
             "source_dir": source_dir,
             "dest_dir": dest_dir,
             "hotfolder": is_direct_hotfolder,
+            "file_types": file_types,
             "beds": beds_plan
         }
 
@@ -1722,7 +1728,7 @@ class HistoryInterface(QWidget):
                 orient=Qt.Vertical,
                 isClosable=True,
                 position=InfoBarPosition.BOTTOM_RIGHT,
-                duration=-1,
+                duration=10000,
                 parent=self
             )
 
@@ -1972,6 +1978,14 @@ class ModelsSettingsInterface(QWidget):
         self.combo_m_output_mode.addItem("Tiesiogiai į ColorGATE HotFolderį", userData="direct_hotfolder")
         self.combo_m_output_mode.currentIndexChanged.connect(self.on_model_edited)
         form.addLayout(self._field(parent_widget, "Išvestis", self.combo_m_output_mode), 1, 1)
+
+        self.chips_m_types = ChipGroup(parent_widget)
+        for key, text in (("tif", "TIF"), ("png", "PNG"), ("jpg", "JPG"), ("webp", "WEBP")):
+            self.chips_m_types.addChip(key, text)
+        self.chips_m_types.changed.connect(self.on_model_edited)
+        form.addLayout(self._field(parent_widget, "Ieškomi failų tipai", self.chips_m_types,
+                                   "Ieškoma tik pažymėtų tipų failų. Jei pažymėti visi arba nė vienas – ieškoma visų."),
+                       5, 0, 1, 2)
 
         src_row = QHBoxLayout()
         src_row.setSpacing(8)
@@ -2288,6 +2302,7 @@ class ModelsSettingsInterface(QWidget):
             self.edit_m_source.setText(m.get("source", ""))
             self.edit_m_dest.setText(m.get("destination", ""))
             self.edit_m_aliases.setText(", ".join(m.get("aliases", [])))
+            self.chips_m_types.setCheckedKeys(m.get("file_types") or list(FILE_TYPE_GROUPS))
 
             out_mode = m.get("output_mode", "temp_folder")
             idx_mode = self.combo_m_output_mode.findData(out_mode)
@@ -2331,6 +2346,9 @@ class ModelsSettingsInterface(QWidget):
 
             aliases_raw = self.edit_m_aliases.text().split(",")
             m["aliases"] = [a.strip() for a in aliases_raw if a.strip()]
+            types = self.chips_m_types.checkedKeys()
+            # Visi arba nė vienas pažymėtas = ieškoma visų tipų
+            m["file_types"] = [] if len(types) in (0, len(FILE_TYPE_GROUPS)) else types
             self.model_detail_title.setText(m['name'] or "Modelis")
 
     def on_jig_selected(self, row, col):

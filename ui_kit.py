@@ -278,6 +278,14 @@ def build_qss():
     QPushButton[segment="true"]:hover {{ color: {t['text']}; background: transparent; }}
     QPushButton[segment="true"]:checked {{ background: {t['card']}; border: 1px solid {t['border']}; color: {t['text']}; }}
 
+    /* Pasirenkami žetonai (keli vienu metu) */
+    QPushButton[chip="true"] {{
+        background: {t['card']}; border: 1px solid {t['border']}; border-radius: 16px;
+        color: {t['secondary']}; font-size: 13px; font-weight: 500; padding: 0 14px;
+    }}
+    QPushButton[chip="true"]:hover {{ background: {t['fill']}; }}
+    QPushButton[chip="true"]:checked {{ background: {t['fill']}; border: 1px solid {t['text']}; color: {t['text']}; font-weight: 600; }}
+
     /* Laukai */
     QLineEdit, QComboBox, QSpinBox, QTextBrowser[field="true"] {{
         background: {t['card']}; color: {t['text']}; border: 1px solid {t['border']};
@@ -718,6 +726,40 @@ class SegmentedWidget(QFrame):
             if b.isChecked():
                 return k
         return None
+
+
+class ChipGroup(QWidget):
+    """Keli pasirenkami žetonai (pvz. failų tipai). Pilnai suapvalinti, pažymėtas – tamsus rėmelis."""
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._layout.addStretch(1)
+        self._chips = {}
+
+    def addChip(self, key, text):
+        btn = QPushButton(text, self)
+        btn.setProperty("chip", True)
+        btn.setCheckable(True)
+        btn.setFixedHeight(32)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.toggled.connect(lambda _on: self.changed.emit())
+        self._layout.insertWidget(self._layout.count() - 1, btn)
+        self._chips[key] = btn
+        return btn
+
+    def setCheckedKeys(self, keys):
+        keys = set(keys or [])
+        for k, b in self._chips.items():
+            b.blockSignals(True)
+            b.setChecked(k in keys)
+            b.blockSignals(False)
+
+    def checkedKeys(self):
+        return [k for k, b in self._chips.items() if b.isChecked()]
 
 
 class UnderlineTabs(QWidget):

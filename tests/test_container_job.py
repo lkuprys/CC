@@ -100,3 +100,24 @@ def test_prefetch_does_not_wait_for_running_scan(core, tmp_path):
     lock = core._scan_lock_for(key)
     with lock:
         assert core.get_scanned_files(roots, wait=False) == (None, False)
+
+
+def test_model_file_types_limit_search(core, tmp_path, make_file, now):
+    src, out = tmp_path / "src", tmp_path / "out"
+    make_file(src / "a" / "89911_macbook.png", b"PNG", mtime=now)
+    make_file(src / "b" / "89911_macbook.tif", b"TIF", mtime=now - 100)
+    p = plan(src, out, [("T", ["PID-89911"])])
+    p["file_types"] = ["tif"]
+    res = core.run_container_job(p)
+    assert (out / "T" / "01_T.tif").read_bytes() == b"TIF"
+    assert res["warnings"] == [] and res["ambiguous"] == []
+    # Be apribojimo – du kandidatai ir įspėjimas
+    p.pop("file_types")
+    res = core.run_container_job(p)
+    assert len(res["warnings"]) == 1
+
+
+def test_extensions_for_types(core):
+    assert core.extensions_for_types(["tif"]) == {".tif", ".tiff"}
+    assert core.extensions_for_types(["JPG", ".png"]) == {".jpg", ".jpeg", ".png"}
+    assert core.extensions_for_types([]) == core.SUPPORTED_IMAGE_EXTENSIONS
