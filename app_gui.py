@@ -586,7 +586,9 @@ class ContainerStudioInterface(QWidget):
         self._prefetch_timer = QTimer(self)
         self._prefetch_timer.setSingleShot(True)
         self._prefetch_timer.setInterval(700)
-        self._prefetch_timer.timeout.connect(lambda: prefetch_scanned_files(self._prefetch_source))
+        self._prefetch_network = True
+        self._prefetch_timer.timeout.connect(
+            lambda: prefetch_scanned_files(self._prefetch_source, self._prefetch_network))
         self.ambiguous_items_by_bed = {}  # {stalas: {vieta, ...}}
         self._job_worker = None
         self._job_context = None
@@ -807,6 +809,7 @@ class ContainerStudioInterface(QWidget):
             return
         # Išankstinis skenavimas su delsa – vartant modelių sąrašą nepaleidžiama daug skenavimų
         self._prefetch_source = m_data.get("source", "")
+        self._prefetch_network = m_data.get("search_network", True)
         self._prefetch_timer.start()
 
         jig_id = m_data.get("jig_id", "jig_2x5")
@@ -1288,6 +1291,7 @@ class ContainerStudioInterface(QWidget):
         dest_dir = m_data.get("destination", "").strip()
         output_mode = m_data.get("output_mode", "temp_folder")
         file_types = m_data.get("file_types") or []
+        search_network = m_data.get("search_network", True)
         is_direct_hotfolder = (output_mode == "direct_hotfolder")
 
         if is_direct_hotfolder and not dest_dir:
@@ -1320,6 +1324,7 @@ class ContainerStudioInterface(QWidget):
             "dest_dir": dest_dir,
             "hotfolder": is_direct_hotfolder,
             "file_types": file_types,
+            "search_network": search_network,
             "beds": beds_plan
         }
 
@@ -1699,6 +1704,7 @@ class HistoryInterface(QWidget):
         is_direct_hotfolder = (it.get("output_mode", "temp_folder") == "direct_hotfolder")
         model = next((m for m in load_models_data() if m.get("name") == it.get("model_name")), {})
         file_types = (model.get("file_types") if "file_types" in model else it.get("file_types")) or []
+        search_network = model.get("search_network", True)
 
         if is_direct_hotfolder and not dest_dir:
             InfoBar.error(
@@ -1734,6 +1740,7 @@ class HistoryInterface(QWidget):
             "dest_dir": dest_dir,
             "hotfolder": is_direct_hotfolder,
             "file_types": file_types,
+            "search_network": search_network,
             "beds": beds_plan
         }
 
@@ -2038,6 +2045,14 @@ class ModelsSettingsInterface(QWidget):
                                    "Ieškoma tik pažymėtų tipų failų. Jei pažymėti visi arba nė vienas – ieškoma visų."),
                        5, 0, 1, 2)
 
+        self.chk_m_network = CheckBox("Ieškoti ir bendrame tinklo aplanke", parent_widget)
+        self.chk_m_network.setChecked(True)
+        self.chk_m_network.toggled.connect(self.on_model_edited)
+        form.addLayout(self._field(parent_widget, "Paieška", self.chk_m_network,
+                                   f"{NETWORK_HOTFOLDER_DEFAULT}. Išjunkite, jei šio modelio failai yra tik "
+                                   "spaudos failų aplanke – paieška bus daug greitesnė."),
+                       6, 0, 1, 2)
+
         src_row = QHBoxLayout()
         src_row.setSpacing(8)
         self.edit_m_source = LineEdit(parent_widget)
@@ -2070,7 +2085,11 @@ class ModelsSettingsInterface(QWidget):
         detail_layout.addLayout(form)
         detail_layout.addStretch(1)
 
-        layout.addWidget(self.model_detail_card, 1)
+        # Forma ilga – mažame ekrane ją galima slinkti
+        model_scroll = SmoothScrollArea(parent_widget)
+        model_scroll.setWidgetResizable(True)
+        model_scroll.setWidget(self.model_detail_card)
+        layout.addWidget(model_scroll, 1)
 
         self.update_jig_combos()
         self.populate_models_table()
@@ -2353,7 +2372,12 @@ class ModelsSettingsInterface(QWidget):
             self.edit_m_source.setText(m.get("source", ""))
             self.edit_m_dest.setText(m.get("destination", ""))
             self.edit_m_aliases.setText(", ".join(m.get("aliases", [])))
+            for edit in (self.edit_m_source, self.edit_m_dest, self.edit_m_aliases):
+                edit.setCursorPosition(0)   # ilgi keliai rodomi nuo pradžios
             self.chips_m_types.setCheckedKeys(m.get("file_types") or list(FILE_TYPE_GROUPS))
+            self.chk_m_network.blockSignals(True)
+            self.chk_m_network.setChecked(m.get("search_network", True))
+            self.chk_m_network.blockSignals(False)
 
             out_mode = m.get("output_mode", "temp_folder")
             idx_mode = self.combo_m_output_mode.findData(out_mode)
@@ -2400,6 +2424,7 @@ class ModelsSettingsInterface(QWidget):
             types = self.chips_m_types.checkedKeys()
             # Visi arba nė vienas pažymėtas = ieškoma visų tipų
             m["file_types"] = [] if len(types) in (0, len(FILE_TYPE_GROUPS)) else types
+            m["search_network"] = self.chk_m_network.isChecked()
             self.model_detail_title.setText(m['name'] or "Modelis")
 
     def on_jig_selected(self, row, col):

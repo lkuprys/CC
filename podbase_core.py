@@ -293,18 +293,37 @@ def is_file_ready(file_path, wait_interval=0.25, max_attempts=4):
         log.warning(f"[is_file_ready klaida]: {e}")
         return False
 
-def build_search_roots(source_dir):
+def _root_key(path):
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _is_within(path, base):
+    """True, jei path yra base aplanke arba sutampa su juo."""
+    p, b = _root_key(path), _root_key(base)
+    try:
+        return p == b or os.path.commonpath([p, b]) == b
+    except ValueError:
+        return False
+
+
+def build_search_roots(source_dir, include_network=True):
     """
     Aplankai, kuriuose ieškoma spaudos failų:
-    1) modelio šaltinio aplankas, 2) bendras tinklo HotFolder, 3) brokų (rejected) aplankas iš nustatymų.
+    1) modelio šaltinio aplankas, 2) bendras tinklo HotFolder (jei modeliui įjungta),
+    3) brokų (rejected) aplankas iš nustatymų.
+    Aplankas, esantis kito paieškos aplanko viduje (pvz. READY\\BROKAI, kai šaltinis READY),
+    praleidžiamas – kitaip jis būtų skenuojamas du kartus, o kiekvienas failas rastas dukart.
     """
     source_dir = (source_dir or "").strip()
     reject_dir = (load_app_config().get("reject_folder") or "").strip()
+    candidates = [source_dir, NETWORK_HOTFOLDER_DEFAULT if include_network else "", reject_dir]
 
-    search_roots = []
-    for d in (source_dir, NETWORK_HOTFOLDER_DEFAULT, reject_dir):
-        if d and d not in search_roots and os.path.exists(d):
-            search_roots.append(d)
+    existing = []
+    for d in candidates:
+        if d and os.path.exists(d) and not any(_root_key(d) == _root_key(e) for e in existing):
+            existing.append(d)
+    search_roots = [d for d in existing
+                    if not any(o is not d and _root_key(o) != _root_key(d) and _is_within(d, o) for o in existing)]
 
     if not search_roots and source_dir:
         search_roots.append(source_dir)
@@ -654,22 +673,21 @@ def _scan_lock_for(key):
         return _scan_key_locks.setdefault(key, threading.Lock())
 
 
-def get_scanned_files(search_roots, force=False, wait=True):
-    """
-    Grąžina (failų sąrašas, ar paimta iš atminties).
-    wait=False: jei tie patys aplankai jau skenuojami, nelaukia ir grąžina (None, False).
-    """
-    key = tuple(os.path.normcase(os.path.normpath(r)) for r in search_roots)
-    requested_at = time.time()
+def _scan_root(root, force, wait, requested_at):
+    """Vieno aplanko failų sąrašas: (failai, ar iš atminties) arba (None, False), jei wait=False ir jis jau skenuojamas."""
+    key = _root_key(root)
     lock = _scan_lock_for(key)
-    # Tie patys aplankai skenuojami tik vieną kartą vienu metu (pvz., išankstinis skenavimas ir generavimas)
     if not lock.acquire(blocking=wait):
         return None, False
     try:
-        roots_mtime = _roots_mtime(search_roots)
+        try:
+            root_mtime = os.path.getmtime(root)
+        except OSError:
+            root_mtime = None
         with _scan_cache_lock:
             hit = _scan_cache.get(key)
-        if hit and hit[2] == roots_mtime:
+        # Jei aplanke tiesiogiai atsirado / dingo failas ar poaplankis, sąrašas nebeaktualus
+        if hit and hit[2] == root_mtime:
             scan_started = hit[3]
             # force: tinka tik sąrašas, kurio skenavimas PRASIDĖJO po šios užklausos
             if force:
@@ -678,32 +696,50 @@ def get_scanned_files(search_roots, force=False, wait=True):
             elif time.time() - scan_started < SCAN_CACHE_TTL_SECONDS:
                 return hit[1], True
         scan_started = time.time()
-        files = scan_print_files_recursive(search_roots)
+        files = scan_print_files_recursive([root])
+        took = time.time() - scan_started
         with _scan_cache_lock:
-            _scan_cache[key] = (time.time(), files, roots_mtime, scan_started)
+            _scan_cache[key] = (time.time(), files, root_mtime, scan_started)
+        log.info(f"Skenuota: {root} – {len(files)} failų per {took:.1f} s")
         return files, False
     finally:
         lock.release()
 
 
-def prefetch_scanned_files(source_dir):
+def get_scanned_files(search_roots, force=False, wait=True):
+    """
+    Grąžina (failų sąrašas, ar viskas paimta iš atminties).
+    Kiekvienas aplankas įsimenamas atskirai: pasikeitus vienam (pvz. bendram tinklo aplankui),
+    kitų iš naujo skenuoti nereikia. Tas pats failas į sąrašą įtraukiamas tik kartą.
+    wait=False: jau skenuojami aplankai praleidžiami; jei praleisti visi – (None, False).
+    """
+    requested_at = time.time()
+    files, seen = [], set()
+    all_cached, any_done = True, False
+    for root in search_roots:
+        root_files, cached = _scan_root(root, force, wait, requested_at)
+        if root_files is None:
+            continue
+        any_done = True
+        all_cached = all_cached and cached
+        for f in root_files:
+            k = _root_key(f["path"])
+            if k not in seen:
+                seen.add(k)
+                files.append(f)
+    if search_roots and not any_done:
+        return None, False
+    return files, (all_cached and any_done)
+
+
+def prefetch_scanned_files(source_dir, include_network=True):
     """Pradeda skenuoti modelio aplankus fone, kad paspaudus „Generuoti“ sąrašas jau būtų paruoštas."""
     def _run():
         try:
-            get_scanned_files(build_search_roots(source_dir), wait=False)
+            get_scanned_files(build_search_roots(source_dir, include_network), wait=False)
         except Exception as e:
             log.warning(f"[išankstinis skenavimas]: {e}")
     threading.Thread(target=_run, name="prefetch-scan", daemon=True).start()
-
-
-def _roots_mtime(search_roots):
-    result = []
-    for r in search_roots:
-        try:
-            result.append(os.path.getmtime(r))
-        except OSError:
-            result.append(None)
-    return tuple(result)
 
 
 def unique_destination(dst):
@@ -763,7 +799,8 @@ def run_container_job(plan, progress=None):
             f"Konteineris: {len(plan.get('beds', []))} stal., nukopijuota {res['copied']}, "
             f"nerasta {len(res['missing'])}, klaidų {len(res['errors'])}, "
             f"{'HotFolder' if plan.get('hotfolder') else 'laikinas aplankas'} → {plan.get('dest_dir') or DESKTOP_DIR} "
-            f"({time.time() - started:.1f} s)"
+            f"({time.time() - started:.1f} s, iš jų paieška {res.get('search_seconds', 0):.1f} s, "
+            f"aplankai: {', '.join(res.get('search_roots', [])) or '–'})"
         )
         for bed_idx, item_idx, name in res["missing"]:
             log.info(f"  nerasta: stalas {bed_idx + 1}, vieta {item_idx + 1}: {name}")
@@ -798,7 +835,8 @@ def _run_container_job(plan, progress=None):
               "found": [], "warnings": [], "ambiguous": [], "blanks": []}
 
     report("Tikrinami paieškos aplankai...")
-    search_roots = build_search_roots(plan.get("source_dir", ""))
+    search_started = time.time()
+    search_roots = build_search_roots(plan.get("source_dir", ""), plan.get("search_network", True))
     result["search_roots"] = search_roots
 
     def match_all(scanned):
@@ -821,6 +859,7 @@ def _run_container_job(plan, progress=None):
         scanned, _ = get_scanned_files(search_roots, force=True)
         candidates_by_slot = match_all(only_allowed(scanned))
     matches = {k: (c[0][2] if c else None) for k, c in candidates_by_slot.items()}
+    result["search_seconds"] = time.time() - search_started
 
     # Tuščių lizdų dydis: pirmas rastas to paties stalo failas (jei nėra – bet kurio stalo)
     blank_ref = {}
@@ -837,10 +876,10 @@ def _run_container_job(plan, progress=None):
             if others:
                 chosen = cands[0][2]
                 result["ambiguous"].append((b["bed_idx"], i))
+                also = "; ".join(others[:2]) + (f" ir dar {len(others) - 2}" if len(others) > 2 else "")
                 result["warnings"].append(
                     f"{missing_label(name)} (stalas {b['bed_idx'] + 1}, vieta {i + 1}): rasti {len(others) + 1} "
-                    f"tinkami failai, paimtas naujausias – {os.path.basename(chosen)} "
-                    f"({os.path.dirname(chosen)})"
+                    f"tinkami failai, paimtas naujausias – {chosen}. Kiti: {also}"
                 )
 
     is_hot = plan.get("hotfolder", False)

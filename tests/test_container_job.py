@@ -87,17 +87,16 @@ def test_forced_rescan_ignores_scan_started_before_request(core, tmp_path, make_
     src = tmp_path / "src"
     make_file(src / "1001_a.png")
     roots = [str(src)]
-    key = tuple(os.path.normcase(os.path.normpath(r)) for r in roots)
+    key = core._root_key(str(src))
     # Kito skenavimo rezultatas: baigtas „ateityje“, bet pradėtas prieš užklausą – be naujo failo
-    core._scan_cache[key] = (now + 60, [], core._roots_mtime(roots), now - 5)
+    core._scan_cache[key] = (now + 60, [], os.path.getmtime(str(src)), now - 5)
     files, from_cache = core.get_scanned_files(roots, force=True)
     assert [f["filename"] for f in files] == ["1001_a.png"] and from_cache is False
 
 
 def test_prefetch_does_not_wait_for_running_scan(core, tmp_path):
     roots = [str(tmp_path)]
-    key = tuple(os.path.normcase(os.path.normpath(r)) for r in roots)
-    lock = core._scan_lock_for(key)
+    lock = core._scan_lock_for(core._root_key(str(tmp_path)))
     with lock:
         assert core.get_scanned_files(roots, wait=False) == (None, False)
 
@@ -148,3 +147,51 @@ def test_blank_slot_without_reference_is_reported(core, tmp_path):
 def test_plan_item_name(core):
     assert core.plan_item_name({"name": "Tuščias lizdas", "blank": True}) == core.BLANK_TOKEN
     assert core.plan_item_name({"name": "PID-1"}) == "PID-1"
+
+
+def test_nested_reject_folder_is_not_scanned_twice(core, tmp_path, make_file):
+    """READY\\BROKAI kaip brokų aplankas, kai šaltinis READY: failas randamas vieną kartą, įspėjimo nėra."""
+    ready, out = tmp_path / "READY", tmp_path / "out"
+    make_file(ready / "BROKAI" / "301" / "96854_macbook.tif", b"T")
+    core.save_app_config({"reject_folder": str(ready / "BROKAI")})
+    assert core.build_search_roots(str(ready), include_network=False) == [str(ready)]
+    res = core.run_container_job(plan(ready, out, [("T", ["PID-96854"])]))
+    assert res["copied"] == 1 and res["warnings"] == []
+
+
+def test_network_folder_can_be_excluded(core, tmp_path, make_file, monkeypatch):
+    src, net, out = tmp_path / "src", tmp_path / "net", tmp_path / "out"
+    make_file(src / "1001_a.tif", b"LOCAL")
+    make_file(net / "1001_a.tif", b"NET")
+    monkeypatch.setattr(core, "NETWORK_HOTFOLDER_DEFAULT", str(net))
+    assert core.build_search_roots(str(src)) == [str(src), str(net)]
+    assert core.build_search_roots(str(src), include_network=False) == [str(src)]
+    p = plan(src, out, [("T", ["PID-1001"])])
+    p["search_network"] = False
+    res = core.run_container_job(p)
+    assert (out / "T" / "01_T.tif").read_bytes() == b"LOCAL" and res["warnings"] == []
+
+
+def test_per_root_cache_survives_other_root_change(core, tmp_path, make_file, monkeypatch):
+    src, net = tmp_path / "src", tmp_path / "net"
+    make_file(src / "1001_a.tif")
+    make_file(net / "2002_b.tif")
+    roots = [str(src), str(net)]
+    core.get_scanned_files(roots)
+    calls = []
+    real = core.scan_print_files_recursive
+    monkeypatch.setattr(core, "scan_print_files_recursive", lambda r: calls.append(r) or real(r))
+    make_file(net / "3003_c.tif")          # pasikeitė tik tinklo aplankas
+    os.utime(net, None)
+    files, _ = core.get_scanned_files(roots)
+    assert calls == [[str(net)]]
+    assert sorted(f["filename"] for f in files) == ["1001_a.tif", "2002_b.tif", "3003_c.tif"]
+
+
+def test_ambiguity_warning_lists_other_files(core, tmp_path, make_file, now):
+    src, rej, out = tmp_path / "src", tmp_path / "rej", tmp_path / "out"
+    make_file(src / "1001_a.tif", mtime=now - 100)
+    make_file(rej / "1001_a.tif", mtime=now)
+    core.save_app_config({"reject_folder": str(rej)})
+    res = core.run_container_job(plan(src, out, [("T", ["PID-1001"])]))
+    assert str(src / "1001_a.tif") in res["warnings"][0]
