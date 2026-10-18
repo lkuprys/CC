@@ -15,7 +15,7 @@ import sys
 import time
 
 from .cgsetup import ColorGateSetup
-from .generator import generate_prn, load_layout, side_by_side
+from .generator import Job, generate_prn, load_layout, side_by_side
 from .screening import Screen
 
 
@@ -30,7 +30,7 @@ def main(argv=None):
     g = sub.add_parser("generate", help="TIF(s) -> PRN + BMP")
     g.add_argument("--bundle", required=True)
     g.add_argument("--layout", help="layout JSON with job positions (see generator.load_layout)")
-    g.add_argument("--tif", action="append", help="TIF file(s), placed left to right")
+    g.add_argument("--tif", "--image", dest="tif", action="append", help="TIF/PNG file(s), placed left to right")
     g.add_argument("--gap-mm", type=float, default=None, help="gap between --tif jobs (default 1195 px = 42.2 mm)")
     g.add_argument("--x", type=float, default=0, help="x of first --tif job")
     g.add_argument("--y", type=float, default=0, help="y of first --tif job")
@@ -53,6 +53,20 @@ def main(argv=None):
     ca.add_argument("--name", default="SpeedScreen_256x448px")
     ca.add_argument("--job-x", type=int); ca.add_argument("--job-y", type=int)
 
+    rc = sub.add_parser("rgb-chart", help="write the RGB colour calibration chart PNG (RGB printers, e.g. Flora)")
+    rc.add_argument("--out", required=True)
+    rc.add_argument("--kind", choices=("main", "dark"), default="main",
+                    help="main: 13^3 grid + greys (required); dark: extra 11^3 shadow grid (refines dark tones)")
+
+    cr = sub.add_parser("calibrate-rgb", help="measure ColorGate's PRN of the RGB chart, store the LUT in the bundle")
+    cr.add_argument("--bundle", required=True)
+    cr.add_argument("--prn", required=True)
+    cr.add_argument("--chart", required=True, help="chart .json written by 'rgb-chart'")
+    cr.add_argument("--image", help="the PNG exactly as ColorGate received it (JobDir\\<job>.CJB\\EPS-Data\\*.png); "
+                                    "default: the chart PNG next to the .json")
+    cr.add_argument("--add", action="store_true",
+                    help="keep the chart measurements already in the bundle (e.g. add the dark chart to the main one)")
+
     a = ap.parse_args(argv)
     if a.cmd == "bundle":
         s = ColorGateSetup.from_colorgate(a.job_settings)
@@ -70,7 +84,8 @@ def main(argv=None):
             pw = ph = None
         pw = tox(a.page_width) if a.page_width else pw
         ph = toy(a.page_height) if a.page_height else ph
-        screen = Screen.load(a.screen or s.screen)
+        from .generator import make_screen
+        screen = Screen.load(a.screen) if a.screen else make_screen(s)
         t0 = time.time()
         info = generate_prn(jobs, a.out, s, screen, pw, ph, bmp_path=None if a.no_bmp else "auto",
                             progress=lambda y, h: print(f"\r{y}/{h} lines", end="", file=sys.stderr))
@@ -98,6 +113,24 @@ def main(argv=None):
         print(rep)
         scr.save(a.name, note=f"extracted from {a.prn}")
         print(f"saved screen '{a.name}'")
+    elif a.cmd == "rgb-chart":
+        from .rgb_chart import make_rgb_chart
+        js = make_rgb_chart(a.out, a.kind)
+        print(f"chart: {a.out}\nlayout: {js}\nRIP it through the production hot folder (output to file), then run 'calibrate-rgb'.")
+    elif a.cmd == "calibrate-rgb":
+        import os
+        from .rgb_chart import build_rgb_lut, measure_rgb_chart
+        s = ColorGateSetup.load_bundle(a.bundle)
+        image = a.image or os.path.splitext(a.chart)[0] + ".png"
+        meas = measure_rgb_chart(a.prn, a.chart, image, s)
+        from .color import ColorPipeline
+        s.rgb_measurements = (s.rgb_measurements if a.add else []) + meas
+        s.rgb_lut = None
+        s.rgb_lut = build_rgb_lut(s.rgb_measurements, [c for c in s.channels if c != "W"], pipe=ColorPipeline(s))
+        s.tone_correction = {}
+        s.save_bundle(a.bundle)
+        print(f"{len(meas)} patches measured ({len(s.rgb_measurements)} in total), "
+              f"RGB model ({len(s.rgb_lut['grid'])}^3 grid) stored in {a.bundle}")
 
 
 if __name__ == "__main__":

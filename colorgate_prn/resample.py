@@ -37,49 +37,22 @@ def taps(n_in: int, n_out: int):
 
 
 class Resampler:
-    """Upsamples an (H, W, C) image; x pass computed on demand for the input rows a strip needs,
-    y pass streamed in strips of output lines (memory stays small even for large jobs)."""
+    """Upsamples an (H, W, C) image; x pass done once, y pass streamed in strips of output lines."""
 
     def __init__(self, img: np.ndarray, out_w: int, out_h: int, lo: float = 0.0, hi: float = 255.0):
+        img = img.astype(np.float32)
         if img.ndim == 2:
             img = img[..., None]
-        self.img = img  # kept in its own dtype; converted to float32 per chunk
-        self.in_h, in_w, self.nc = img.shape
+        self.in_h, in_w, _ = img.shape
         self.out_w, self.out_h, self.lo, self.hi = out_w, out_h, lo, hi
-        self.ix, self.wx = taps(in_w, out_w)
+        ix, wx = taps(in_w, out_w)
+        self.xpass = np.empty((self.in_h, out_w, img.shape[2]), np.float32)
+        for r in range(0, self.in_h, 256):  # chunked to keep the (rows, out_w, 4, C) gather small
+            self.xpass[r:r + 256] = np.einsum("hjkc,jk->hjc", img[r:r + 256][:, ix, :], wx, optimize=True)
         self.iy, self.wy = taps(self.in_h, out_h)
-        self._c0, self._cache = 0, np.empty((0, out_w, self.nc), np.float32)
-
-    def _xpass(self, r0: int, r1: int) -> np.ndarray:
-        out = np.empty((r1 - r0, self.out_w, self.nc), np.float32)
-        for r in range(r0, r1, 256):  # chunked to keep the (rows, out_w, 4, C) gather small
-            e = min(r1, r + 256)
-            chunk = self.img[r:e].astype(np.float32)
-            out[r - r0:e - r0] = np.einsum("hjkc,jk->hjc", chunk[:, self.ix, :], self.wx, optimize=True)
-        return out
-
-    def _rows(self, r0: int, r1: int) -> np.ndarray:
-        """x-passed input rows r0..r1-1; rows shared with the previous strip are reused."""
-        c0, c1 = self._c0, self._c0 + len(self._cache)
-        if c0 <= r0 and r1 <= c1:
-            return self._cache[r0 - c0:r1 - c0]
-        rows = np.empty((r1 - r0, self.out_w, self.nc), np.float32)
-        o0, o1 = max(r0, c0), min(r1, c1)
-        if o0 < o1:
-            rows[o0 - r0:o1 - r0] = self._cache[o0 - c0:o1 - c0]
-            gaps = [(r0, o0), (o1, r1)]
-        else:
-            gaps = [(r0, r1)]
-        for g0, g1 in gaps:
-            if g0 < g1:
-                rows[g0 - r0:g1 - r0] = self._xpass(g0, g1)
-        self._c0, self._cache = r0, rows
-        return rows
 
     def lines(self, y0: int, y1: int) -> np.ndarray:
         """Output lines y0..y1-1 as (n, out_w, C) float32, clipped to [lo, hi]."""
-        iy = self.iy[y0:y1]
-        r0, r1 = int(iy.min()), int(iy.max()) + 1
-        rows = self._rows(r0, r1)[iy - r0]  # (n, 4, out_w, C)
+        rows = self.xpass[self.iy[y0:y1]]  # (n, 4, out_w, C)
         out = np.einsum("nkwc,nk->nwc", rows, self.wy[y0:y1], optimize=True)
         return np.clip(out, self.lo, self.hi)

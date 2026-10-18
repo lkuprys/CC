@@ -1,4 +1,8 @@
-﻿"""TIF jobs -> PRN (+ BMP thumbnail), reproducing ColorGate Productionserver output for the GUNSJET 2513."""
+﻿"""TIF / PNG jobs -> PRN (+ BMP thumbnail), reproducing ColorGate Productionserver output.
+
+Printer specifics come from the bundle (ColorGateSetup): channels, resolution, job size on the media
+(dest_mm), rotation, colour chain and screening (threshold screen or error diffusion).
+"""
 from __future__ import annotations
 
 import os
@@ -10,15 +14,17 @@ from PIL import Image
 
 from .cgsetup import ColorGateSetup
 from .color import INKS, ColorPipeline, drop_tone
-from .prn_format import CHANNELS, PrnWriter
+from .prn_format import PrnWriter
 from .resample import Resampler, output_size
 from .screening import Screen
+
+IMAGE_EXT = (".tif", ".tiff")
 
 
 @dataclass
 class Job:
-    tif: str
-    x: int = 0  # position of the job's top-left corner on the page, device pixels
+    tif: str          # image path (TIF or PNG; name kept for compatibility)
+    x: int = 0        # position of the job's top-left corner on the page, device pixels
     y: int = 0
 
     @classmethod
@@ -27,19 +33,38 @@ class Job:
         return cls(tif, int(round(x_mm / 25.4 * xdpi)), int(round(y_mm / 25.4 * ydpi)))
 
 
-def job_size(tif: str, setup: ColorGateSetup) -> tuple:
-    """Device-pixel size (w, h) a TIF will occupy on the page."""
-    w, h, dpi = read_tif_header(tif)
+def mm_to_px(mm: float, dpi: float) -> int:
+    return int(round(mm / 25.4 * dpi))
+
+
+def device_size(w: int, h: int, dpi: float, setup: ColorGateSetup) -> tuple:
+    """Device-pixel size (w, h) of a job: fixed media size from the hot folder (dest_mm) or image size at its dpi."""
+    if setup.dest_mm:
+        return mm_to_px(setup.dest_mm[0], setup.xdpi), mm_to_px(setup.dest_mm[1], setup.ydpi)
     return output_size(w, dpi, setup.xdpi), output_size(h, dpi, setup.ydpi)
 
 
-def side_by_side(tifs, setup: ColorGateSetup, gap_px: int = 1195, x0: int = 0, y0: int = 0) -> list:
-    """Place jobs left to right with a fixed gap (default 1195 px = 42.2 mm, as in the ColorGate sample)."""
+def job_size(path: str, setup: ColorGateSetup) -> tuple:
+    w, h, dpi = read_image_header(path)
+    return device_size(w, h, dpi, setup)
+
+
+def side_by_side(images, setup: ColorGateSetup, gap_px: int = 1195, x0: int = 0, y0: int = 0) -> list:
+    """Place jobs left to right with a fixed gap in device pixels."""
     jobs, x = [], x0
-    for t in tifs:
+    for t in images:
         jobs.append(Job(t, x, y0))
         x += job_size(t, setup)[0] + gap_px
     return jobs
+
+
+def container_layout(images, setup: ColorGateSetup, gap_mm: float, top_mm: float = 0.0, left_mm: float = 0.0) -> list:
+    """ColorGate container ('ORDERED', ContainerJobDistance): x advances by round(job) + round(gap) pixels.
+
+    Flora sample: gap 221.2 mm, top margin 26.5 mm -> jobs at x = 0 and 11939, y = 1878.
+    """
+    return side_by_side(images, setup, mm_to_px(gap_mm, setup.xdpi),
+                        mm_to_px(left_mm, setup.xdpi), mm_to_px(top_mm, setup.ydpi))
 
 
 def load_layout(path: str, setup: ColorGateSetup) -> tuple:
@@ -48,35 +73,59 @@ def load_layout(path: str, setup: ColorGateSetup) -> tuple:
     {
       "units": "px" | "mm",                 (default px)
       "page_width": 18769, "page_height": 10392,   (optional, same units; default = fit jobs)
-      "jobs": [ {"tif": "a.tif", "x": 0, "y": 0}, {"tif": "b.tif", "x": 9982, "y": 0} ]
+      "jobs": [ {"tif": "a.tif", "x": 0, "y": 0}, {"tif": "b.png", "x": 9982, "y": 0} ]
     }
-    Relative tif paths are resolved against the JSON's folder.
+    or a ColorGate-style container (mm):
+    {
+      "container": {"gap_mm": 221.2, "top_mm": 26.5, "page_width_mm": 850.2},
+      "jobs": [ {"image": "a.png"}, {"image": "b.png"} ]
+    }
+    Relative image paths are resolved against the JSON's folder.
     """
     import json
     with open(path, encoding="utf-8") as f:
         d = json.load(f)
     base = os.path.dirname(os.path.abspath(path))
+    img = lambda j: os.path.join(base, j.get("image") or j["tif"])
+    if "container" in d:
+        c = d["container"]
+        jobs = container_layout([img(j) for j in d["jobs"]], setup, c.get("gap_mm", 0.0), c.get("top_mm", 0.0),
+                                c.get("left_mm", 0.0))
+        pw = mm_to_px(c["page_width_mm"], setup.xdpi) if "page_width_mm" in c else None
+        ph = mm_to_px(c["page_height_mm"], setup.ydpi) if "page_height_mm" in c else None
+        return jobs, pw, ph
     mm = d.get("units", "px") == "mm"
-    cx = (lambda v: int(round(v / 25.4 * setup.xdpi))) if mm else int
-    cy = (lambda v: int(round(v / 25.4 * setup.ydpi))) if mm else int
-    jobs = [Job(os.path.join(base, j["tif"]), cx(j.get("x", 0)), cy(j.get("y", 0))) for j in d["jobs"]]
+    cx = (lambda v: mm_to_px(v, setup.xdpi)) if mm else int
+    cy = (lambda v: mm_to_px(v, setup.ydpi)) if mm else int
+    jobs = [Job(img(j), cx(j.get("x", 0)), cy(j.get("y", 0))) for j in d["jobs"]]
     pw = cx(d["page_width"]) if "page_width" in d else None
     ph = cy(d["page_height"]) if "page_height" in d else None
     return jobs, pw, ph
 
 
-def read_tif_header(path: str):
+# ---------------------------------------------------------------------------------------------- image input
+def _tif_dpi(tags) -> float:
+    res = tags["XResolution"].value if "XResolution" in tags else (300, 1)
+    dpi = res[0] / res[1] if res[1] else 300.0
+    if dpi < 1:  # tifffile writes (1, 300) for 300 dpi; ColorGate reads it as 300
+        dpi = res[1] / res[0]
+    if "ResolutionUnit" in tags and int(tags["ResolutionUnit"].value) == 3:
+        dpi *= 2.54
+    return dpi
+
+
+def read_image_header(path: str):
     """(width, height, dpi) without decoding pixels."""
-    with tifffile.TiffFile(path) as tf:
-        page = tf.pages[0]
-        tags = page.tags
-        res = tags["XResolution"].value if "XResolution" in tags else (300, 1)
-        dpi = res[0] / res[1] if res[1] else 300.0
-        if dpi < 1:
-            dpi = res[1] / res[0]
-        if "ResolutionUnit" in tags and int(tags["ResolutionUnit"].value) == 3:
-            dpi *= 2.54
-        return page.shape[1], page.shape[0], dpi
+    if path.lower().endswith(IMAGE_EXT):
+        with tifffile.TiffFile(path) as tf:
+            page = tf.pages[0]
+            return page.shape[1], page.shape[0], _tif_dpi(page.tags)
+    with Image.open(path) as im:
+        return im.size[0], im.size[1], float(im.info.get("dpi", (72, 72))[0])
+
+
+def read_tif_header(path: str):
+    return read_image_header(path)
 
 
 def read_tif(path: str):
@@ -88,13 +137,7 @@ def read_tif(path: str):
         names = []
         if "InkNames" in tags:
             names = [n for n in str(tags["InkNames"].value).split("\x00") if n]
-        res = tags["XResolution"].value if "XResolution" in tags else (300, 1)
-        dpi = res[0] / res[1] if res[1] else 300.0
-        if dpi < 1:  # tifffile writes (1, 300) for 300 dpi; ColorGate reads it as 300
-            dpi = res[1] / res[0]
-        unit = tags["ResolutionUnit"].value if "ResolutionUnit" in tags else 2
-        if int(unit) == 3:
-            dpi *= 2.54
+        dpi = _tif_dpi(tags)
     if data.dtype == np.uint16:
         data = (data >> 8).astype(np.uint8)  # ColorGate: DITHER16TO8 = false
     if data.ndim == 2:
@@ -106,83 +149,107 @@ def read_tif(path: str):
     return np.ascontiguousarray(data[..., :4]), spots, dpi
 
 
+def read_image(path: str):
+    """-> (pixels uint8 (H, W, 3|4), colour space "RGB"|"CMYK", spots, dpi)."""
+    if path.lower().endswith(IMAGE_EXT):
+        with tifffile.TiffFile(path) as tf:
+            photometric = int(tf.pages[0].photometric)
+        if photometric == 2:  # RGB TIF
+            with Image.open(path) as im:
+                dpi = float(im.info.get("dpi", (300, 300))[0])
+                return np.asarray(im.convert("RGB")), "RGB", {}, dpi
+        cmyk, spots, dpi = read_tif(path)
+        return cmyk, "CMYK", spots, dpi
+    with Image.open(path) as im:
+        dpi = float(im.info.get("dpi", (72, 72))[0])
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGBA", im.size, (255, 255, 255, 255))   # transparency over white media
+            im = Image.alpha_composite(bg, im)
+        return np.asarray(im.convert("RGB")), "RGB", {}, dpi
+
+
+# ---------------------------------------------------------------------------------------------- job raster
 class JobRaster:
-    """Per-job ink tones resampled to device resolution, delivered line strips on demand."""
+    """Per-job drop tones at device resolution, delivered in line strips on demand."""
 
-    def __init__(self, job: Job, setup: ColorGateSetup, pipe: ColorPipeline, order: str = "resample_then_separate"):
-        self.job, self.s, self.pipe, self.order = job, setup, pipe, order
-        cmyk, spots, dpi = read_tif(job.tif)
-        h, w, _ = cmyk.shape
-        self.w = output_size(w, dpi, setup.xdpi)
-        self.h = output_size(h, dpi, setup.ydpi)
+    def __init__(self, job: Job, setup: ColorGateSetup, pipe: ColorPipeline, screen):
+        self.job, self.s, self.pipe, self.screen = job, setup, pipe, screen
+        px, self.space, spots, dpi = read_image(job.tif)
+        h, w = px.shape[:2]
+        self.w, self.h = device_size(w, h, dpi, setup)
         white = next((spots[n] for n in setup.white_spot_names if n in spots), None)
-        if order == "separate_then_resample":
-            amount_w = None if white is None else (1.0 - white.astype(np.float32) / 255.0)
-            planes = pipe.inks(cmyk)                                 # (h, w, 6) 0..1
-            if amount_w is not None:
-                planes = np.concatenate([planes, amount_w[..., None]], axis=2)
-            self.rs = Resampler(planes, self.w, self.h, 0.0, 1.0)
-        else:  # resample CMYK (and W) first, colour per device pixel
-            planes = cmyk  # uint8; the resampler converts per chunk
-            if white is not None:
-                planes = np.concatenate([planes, (255 - white)[..., None]], axis=2)
-            self.rs = Resampler(planes, self.w, self.h, 0.0, 255.0)
-        self.has_white = white is not None
+        planes = px.astype(np.float32)
+        self.has_white = white is not None and "W" in setup.channels
+        if self.has_white:
+            planes = np.concatenate([planes, (255.0 - white.astype(np.float32))[..., None]], axis=2)
+        if setup.rotate == 180:
+            planes = planes[::-1, ::-1]
+        elif setup.rotate:
+            raise NotImplementedError(f"rotation {setup.rotate}")
+        self.rs = Resampler(np.ascontiguousarray(planes), self.w, self.h, 0.0, 255.0)
+        self.state = screen.new_state()
 
-    def tones(self, y0: int, y1: int) -> dict:
-        """Drop tones (0..3) for job lines y0..y1-1, dict channel -> (n, w)."""
+    def tones(self, y0: int, y1: int) -> np.ndarray:
+        """Drop tones (0..3) for job lines y0..y1-1 as (n, w, channels) in setup.channels order."""
         p = self.rs.lines(y0, y1)
-        if self.order != "separate_then_resample":
-            cm = np.rint(p[..., :4]).astype(np.uint8)
-            inks = self.pipe.inks(cm)
-            w = p[..., 4] / 255.0 if self.has_white else None
-        else:
-            inks = p[..., :6]
-            w = p[..., 6] if self.has_white else None
-        out = {ink: drop_tone(inks[..., i], self.s.droplet) for i, ink in enumerate(INKS)}
-        out["W"] = drop_tone(w, self.s.droplet) if w is not None else np.zeros(inks.shape[:2], np.float32)
+        nc = 3 if self.space == "RGB" else 4
+        t = self.pipe.drop_tones(p[..., :nc], self.space)
+        out = np.zeros(t.shape[:2] + (len(self.s.channels),), np.float32)
+        for ci, ch in enumerate(self.s.channels):
+            if ch in INKS:
+                out[..., ci] = t[..., INKS.index(ch)]
+            elif ch == "W" and self.has_white:
+                out[..., ci] = drop_tone(p[..., nc] / 255.0, self.s.droplet)
         return out
 
+    def levels(self, y0: int, y1: int) -> np.ndarray:
+        """Screened drop levels (n, w, channels) uint8 for job lines y0..y1-1 (call in increasing order)."""
+        t = self.tones(y0, y1)
+        if hasattr(self.screen, "apply_all"):
+            return self.screen.apply_all(t, self.state)
+        return np.stack([self.screen.apply(t[..., ci], ch, 0, y0) for ci, ch in enumerate(self.s.channels)], -1)
 
-def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen: Screen | None = None,
+
+def make_screen(setup: ColorGateSetup, screen=None):
+    if screen is not None:
+        return screen
+    if setup.screen_type == "error_diffusion":
+        from .diffusion import ErrorDiffusion
+        return ErrorDiffusion()
+    return Screen.load(setup.screen)
+
+
+def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen=None,
                  page_width: int | None = None, page_height: int | None = None,
-                 bmp_path: str | None = "auto", strip: int = 448, order: str = "resample_then_separate",
-                 progress=None) -> dict:
+                 bmp_path: str | None = "auto", strip: int = 448, progress=None) -> dict:
     """Render jobs onto one page and write PRN (+ BMP thumbnail next to it when bmp_path == 'auto')."""
-    screen = screen or Screen.load(setup.screen)
+    screen = make_screen(setup, screen)
     pipe = ColorPipeline(setup)
-    # Job sizes come from the TIF headers; rasters (decoded TIF + resampler) exist only while
-    # the strips cross the job, so memory does not grow with the number of jobs on the table.
-    sizes = [job_size(j.tif, setup) for j in jobs]
-    W = page_width or max(j.x + w for j, (w, h) in zip(jobs, sizes))
-    H = page_height or max(j.y + h for j, (w, h) in zip(jobs, sizes))
-    live = {}
+    rasters = [JobRaster(j, setup, pipe, screen) for j in jobs]
+    W = page_width or max(r.job.x + r.w for r in rasters)
+    H = page_height or max(r.job.y + r.h for r in rasters)
+    C = len(setup.channels)
     thumb_w = 500
     thumb_h = max(1, int(round(thumb_w * (H / setup.ydpi) / (W / setup.xdpi))))
     thumb = np.zeros((thumb_h, thumb_w, 3), np.float64); thumb_n = np.zeros((thumb_h, 1), np.float64)
-    with PrnWriter(out_path, W, H, len(CHANNELS), setup.xdpi, setup.ydpi) as wr:
+    with PrnWriter(out_path, W, H, C, setup.xdpi, setup.ydpi) as wr:
         for y0 in range(0, H, strip):
             y1 = min(H, y0 + strip)
-            block = np.zeros((y1 - y0, len(CHANNELS), W), np.uint8)
-            for k, (job, (jw, jh)) in enumerate(zip(jobs, sizes)):
-                if y0 >= job.y + jh:
-                    live.pop(k, None)
-                    continue
-                if y1 <= job.y:
-                    continue
-                if k not in live:
-                    live[k] = JobRaster(job, setup, pipe, order)
-                r = live[k]
+            block = np.zeros((y1 - y0, C, W), np.uint8)
+            for r in rasters:
                 jy0, jy1 = max(y0, r.job.y), min(y1, r.job.y + r.h)
                 if jy0 >= jy1:
                     continue
-                tones = r.tones(jy0 - r.job.y, jy1 - r.job.y)
+                lv = r.levels(jy0 - r.job.y, jy1 - r.job.y)           # (n, job w, C), full job width
                 xa, xb = max(0, r.job.x), min(W, r.job.x + r.w)
-                for ci, ch in enumerate(CHANNELS):
-                    lv = screen.apply(tones[ch][:, xa - r.job.x:xb - r.job.x], ch, xa - r.job.x, jy0 - r.job.y)
-                    block[jy0 - y0:jy1 - y0, ci, xa:xb] = np.maximum(block[jy0 - y0:jy1 - y0, ci, xa:xb], lv)
+                if xa >= xb:
+                    continue
+                part = lv[:, xa - r.job.x:xb - r.job.x].transpose(0, 2, 1)
+                dst = block[jy0 - y0:jy1 - y0, :, xa:xb]
+                np.maximum(dst, part, out=dst)
             wr.write_lines(block)
-            _accumulate_thumb(block, thumb, thumb_n, y0, H, W)
+            _accumulate_thumb(block, thumb, thumb_n, y0, H, W, setup.channels)
             if progress:
                 progress(y1, H)
     if bmp_path == "auto":
@@ -191,7 +258,7 @@ def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen: Screen | No
         rgb = np.where(thumb_n[:, :, None] > 0, thumb / np.maximum(thumb_n[:, :, None], 1), 255)
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         Image.fromarray(rgb, "RGB").save(bmp_path, format="BMP")
-    return {"width": W, "height": H, "jobs": [(j.tif, j.x, j.y, w, h) for j, (w, h) in zip(jobs, sizes)]}
+    return {"width": W, "height": H, "jobs": [(r.job.tif, r.job.x, r.job.y, r.w, r.h) for r in rasters]}
 
 
 # rough RGB appearance of each ink at full coverage (for the thumbnail only)
@@ -199,17 +266,18 @@ _INK_RGB = {"C": (0, 160, 230), "M": (230, 0, 125), "Y": (255, 235, 0), "K": (20
             "Lc": (130, 210, 240), "Lm": (240, 140, 190)}
 
 
-def _accumulate_thumb(block, thumb, thumb_n, y0, H, W):
+def _accumulate_thumb(block, thumb, thumb_n, y0, H, W, channels):
     th, tw, _ = thumb.shape
-    cov = block[:, :6, :].astype(np.float32) / 3.0                       # (n, 6, W)
+    inks = [(i, ch) for i, ch in enumerate(channels) if ch in _INK_RGB]
+    cov = block[:, [i for i, _ in inks], :].astype(np.float32) / 3.0      # (n, k, W)
     xs = (np.arange(W) * tw // W)
     ty = ((y0 + np.arange(block.shape[0])) * th // H)
     for row in np.unique(ty):
-        sel = cov[ty == row]                                              # (k, 6, W)
-        m = sel.mean(0)                                                   # (6, W)
+        sel = cov[ty == row]
+        m = sel.mean(0)
         col = np.ones((W, 3)) * 255.0
-        for i, ink in enumerate(("C", "M", "Y", "K", "Lc", "Lm")):
-            a = m[i][:, None]
+        for k, (_, ink) in enumerate(inks):
+            a = m[k][:, None]
             col = col * (1 - a) + col * a * (np.array(_INK_RGB[ink]) / 255.0)
         sums = np.zeros((tw, 3)); np.add.at(sums, xs, col)
         cnt = np.bincount(xs, minlength=tw)[:, None]

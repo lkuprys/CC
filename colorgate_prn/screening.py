@@ -36,7 +36,10 @@ class Screen:
         with open(os.path.join(folder, name + ".json"), "w") as f:
             json.dump({"offsets": {k: list(v) for k, v in self.offsets.items()}, "note": note}, f, indent=1)
 
-    def apply(self, t: np.ndarray, channel: str, x0: int, y0: int) -> np.ndarray:
+    def new_state(self):
+        return None
+
+    def apply(self, t: np.ndarray, channel: str, x0: int, y0: int, state=None) -> np.ndarray:
         """t: (lines, width) drop tones 0..3 for job-local columns x0.. and lines y0..  -> uint8 levels 0..3."""
         ox, oy = self.offsets[channel]
         n, w = t.shape

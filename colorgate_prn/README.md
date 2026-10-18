@@ -1,99 +1,141 @@
 # colorgate_prn — ColorGate PRN generavimas be ColorGate
 
-Atkuria ColorGate Productionserver 10 išvestį spausdintuvui **GUNSJET 2513**
-(720×1200 dpi, kanalai C M Y K Lc Lm W, 2 bitai/pikselis).
+Atkuria ColorGate Productionserver išvestį dviem spausdintuvams:
 
-Palyginimas su tikru ColorGate PRN (`2681 test 2vnt_1_1_1.prn`):
+| bundle | spausdintuvas | įvestis | raiška | kanalai | rastras |
+|---|---|---|---|---|---|
+| `bundle_gunsjet` | GUNSJET 2513 (PS10) | CMYK TIF + W spot | 720×1200 | C M Y K Lc Lm W | Speed Screen 256×448 |
+| `bundle_flora` | Flora XTRA2512UV, hotfolder „POD F2“ (PS23) | RGB PNG | 720×1800 | C M Y K Lc Lm | Error Diffusion („Smooth“) |
 
-| kanalas | identiški pikseliai |
-|---|---|
-| C | 99.97 % |
-| M | 99.94 % |
-| Y | 99.83 % |
-| K | 99.94 % |
-| Lc | 99.54 % |
-| Lm | 99.69 % |
-| W | 99.998 % |
-
-Likę skirtumai daugiausia kyla iš rastro matricos, kuri dabar yra **įvertinta** iš pavyzdžio.
-Kaip ją padaryti tikslią, žr. skyrių „Kalibracija“.
+Pastaba: ColorGate 23 eilė vadinasi „GUNSJET 2513“, bet jos PRN spausdina Flora valdiklis
+(`CG OUTPUT\POD F2`). Senasis GUNSJET bundle priklauso Productionserver 10 kompiuteriui.
 
 ## Diegimas
 
 ```
-pip install numpy tifffile imagecodecs pillow scipy
+pip install --user numpy tifffile imagecodecs pillow scipy numba
 ```
 
-## Greitas startas
+`numba` reikalingas klaidų difuzijai (Flora).
+
+## Flora: greitas startas
 
 ```
-python -m colorgate_prn generate --bundle colorgate_prn/bundle_gunsjet --layout layout_example.json --out lapas.prn
+python -m colorgate_prn generate --bundle colorgate_prn/bundle_flora --layout layout_flora.json --out lapas.prn
+```
+
+`layout_flora.json` (ColorGate konteinerio išdėstymas, mm):
+
+```json
+{
+  "container": {"gap_mm": 221.2, "top_mm": 26.5, "page_width_mm": 850.2},
+  "jobs": [ {"image": "01_testastestas.png"}, {"image": "02_PID-107854.png"} ]
+}
 ```
 
 Arba iš Python:
 
 ```python
-from colorgate_prn import ColorGateSetup, Job, generate_prn
-
-setup = ColorGateSetup.load_bundle("colorgate_prn/bundle_gunsjet")
-jobs = [Job("106887.tif", x=0, y=0),               # pozicija įrenginio pikseliais
-        Job.mm("106888.tif", x_mm=352.15, y_mm=0)]   # arba milimetrais
-generate_prn(jobs, "lapas.prn", setup)               # sukuria ir lapas.bmp
+from colorgate_prn import ColorGateSetup, Job, generate_prn, container_layout
+s = ColorGateSetup.load_bundle("colorgate_prn/bundle_flora")
+jobs = container_layout(["a.png", "b.png"], s, gap_mm=221.2, top_mm=26.5)   # arba Job("a.png", x=0, y=1878)
+generate_prn(jobs, "lapas.prn", s, page_width=24100)                        # sukuria ir lapas.bmp
 ```
 
-## Pozicijos ir ofsetai (keičiami)
+### Ką daro ColorGate (Flora), nustatyta iš PRN ir JobDir
 
-* **Darbų koordinatės:** `Job(tif, x, y)` pikseliais arba `Job.mm(...)`, `layout.json` failas
-  (`"units": "px"` arba `"mm"`), arba `side_by_side(tifs, setup, gap_px)`.
-  ColorGate pavyzdyje: 1-as darbas x=0, 2-as x=9982 (tarpas 1195 px = 42,2 mm), y=0.
-* **Lapo dydis:** `page_width` / `page_height`; jei nenurodyta, lapas apima visus darbus.
-* **Rastro kanalų ofsetai:** `data/SpeedScreen_256x448px.json`, laukas `"offsets"`:
-  kanalas → `[ox, oy]`. Kanalas skaito slenkstį `thr[(y+oy) % 448, (x+ox) % 256]`,
-  kur x, y skaičiuojami nuo darbo kairiojo viršutinio kampo.
+* **PRN antraštė:** tokia pati kaip GUNSJET (48 B, `YR`), 6 kanalai C M Y K Lc Lm, 2 bitai, 3 lašų dydžiai.
+  Eilutės ilgis baitais lygiuojamas į 4 (6025 → 6028).
+* **Darbo dydis:** hotfolder'is kiekvieną darbą ištempia iki **200 × 261 mm** (proporcijos nelaikomos):
+  5669 × 18496 px. Dydis nepriklauso nuo PNG dpi.
+* **Pasukimas:** 180° (`TURN2`).
+* **Konteineris:** darbai iš kairės į dešinę, x = Σ(round(200 mm) + round(221,2 mm)) = 0, 11939 px;
+  y = round(26,5 mm) = 1878; lapo plotis 850,2 mm = 24100 px; aukštis = 1878 + 18496.
+  Viską galima keisti per `layout.json` (`container` arba `jobs` su `x`/`y` px ar mm).
+* **Mastelis:** pirma keičiamas RGB mastelis (Mitchell kubinis, centruotas), paskui spalvos.
+  Branduolio ar eiliškumo pakeitimas tonų beveik nekeičia (< 0,001).
+* **Spalvos:** sRGB → „Soft leather 260410 285H+ 10_100K.icc“ → kreivės → 2026.ccx (Lin2, C/M skaidymas į
+  šviesius rašalus, Lin1, lašų dydžiai 1/3 ir 2/3). ColorGate'o RGB→CMYK žingsnio LittleCMS neatkuria:
+  balta (255,255,255) ColorGate gauna apie 3,5 % C/M/K (rašalas ant baltos: K 1,1 %, Lc 1,7 %, Lm 1,3 %).
+  Todėl RGB→įrenginio CMYK **išmatuotas kalibracijos lentele** (13³ tinklelis + pilkų skalė).
+  Modelis (`setup.json` → `rgb_lut`): LittleCMS perceptual (sRGB → išvesties profilis) duoda formą tarp
+  tinklelio taškų (K pradžia, GCR), o išmatuota pataisa (`residual`, tetraedrinė interpoliacija) ją
+  pritraukia prie ColorGate tinklelio taškuose. Tamsiems beveik pilkiems tonams taikoma papildoma
+  pataisa iš 256 pilkų langelių (`grey_corr`). Viskas daroma įrenginio CMYK erdvėje, prieš netiesinį
+  C→C+Lc / M→M+Lm skaidymą. Perceptual pagrindas veikė geriau nei relative, saturation ar vien lentelė.
+* **Rastras:** daugialygė Floyd–Steinberg klaidų difuzija (7/16, 3/16, 5/16, 1/16), slenkstis 0,5,
+  klaida prasideda nuo 0 darbo kampe, serpentine. Pirmoji taškų eilutė baltame plote sutampa su ColorGate
+  tiksliai (Lc 16-a, Lm 21-a, K 25-a eilutė, taškai kas 5 px), bet toliau taškų vietos skiriasi.
 
-## ColorGate grandinė (atkurta ir patikrinta)
+### Tikslumas (testas: `Container - 01_testastestas_1_1_1.prn`)
 
-1. TIF CMYK → **USWebCoatedSWOP.icc → Kingt 720x1200 M+ 300.icm**, santykinis kolorimetrinis + BPC
-   (ColorGate intent 7), LittleCMS.
-2. Užduoties kreivė Yellow kanalui (`settings.xml` → `ExtraColorTransfer`, kubinė Bézier kreivė).
-3. **Lin2**: 4 kanalų 1D kreivės (.ccx `Linearization Id=2`, ICC DeviceLink, rašalo ribos).
-4. **Rašalo skaidymas**: C → C + Lc, M → M + Lm (.ccx `ColorTransfer`).
-5. **Lin1**: 6 kanalų 1D kreivės (maks. rašalas: C 34,9 %, M 65,1 %, Y 80 %, K 70,2 %, Lc 94,1 %, Lm 91 %).
-6. **Lašų dydžiai** (.ccx `DropletCurves`): tonas 0–0,33 → mažas lašas 0→100 %,
-   0,33–0,66 → mažas→vidutinis, 0,66–1 → vidutinis→didelis.
-7. **W**: spot kanalas „W“ → DeviceWhite (`w.cct`), kiekis = 1 − W/255 (Photoshop spot konvencija),
-   be ICC konversijos.
-8. **Mastelis**: dydis = ceil(px × 720/300) ir ceil(px × 1200/300); Mitchell-Netravali kubinė
-   interpoliacija (B=C=1/3), centruota. Pirma keičiamas CMYK mastelis, po to spalvos.
-9. **Speed Screen 256×448**: viena 8 bitų slenksčių matrica visiems kanalams, kiekvienas kanalas
-   turi savo ofsetą, matrica pririšta prie darbo kampo.
-   `lygis = floor(t) + (round(frac(t)·255) > slenkstis)`.
-10. **PRN**: 48 B antraštė + eilutės pakaitomis po kanalą, 4 px/baitas (žr. `prn_format.py`).
+| kanalas | vid. lygis ColorGate | vid. lygis mūsų | identiški px | bloko (32 px) tono klaida p99 |
+|---|---|---|---|---|
+| C | 0.0020 | 0.0020 | 99.6 % | 0.002 |
+| M | 0.0194 | 0.0199 | 96.6 % | 0.005 |
+| Y | 0.0433 | 0.0434 | 93.2 % | 0.004 |
+| K | 0.1003 | 0.1001 | 90.1 % | 0.007 |
+| Lc | 0.0605 | 0.0604 | 90.9 % | 0.003 |
+| Lm | 0.0586 | 0.0579 | 91.4 % | 0.007 |
 
-## Bundle (be ColorGate)
+(Su pagrindine ir tamsių tonų lentele. Vien su pagrindine K p99 buvo 0,044, o giliuose šešėliuose K iki 0,34
+lygio per mažai.) Tonai (rašalo kiekis plote) sutampa, atskiri taškai — ne: klaidų difuzija chaotiška,
+vos kitokia tono reikšmė duoda kitas taškų vietas.
 
-`bundle_gunsjet/` turi ICC profilius ir `setup.json` (kreivės). Jei ColorGate nustatymai pasikeičia
-(kitas profilis, .ccx ar Y kreivė), bundle sukurkite iš naujo:
+### Kalibracija (spalvos)
+
+1. `python -m colorgate_prn rgb-chart --out flora_rgb_chart.png` (2339×3059 px, kaip tikri darbai).
+2. **Originalų** PNG failą (nekeistą, nesumažintą) įmeskite į „POD F2“ hotfolder'į, išvestis į failą.
+3. ```
+   python -m colorgate_prn calibrate-rgb --bundle colorgate_prn/bundle_flora --prn "<ColorGate PRN>" ^
+          --chart flora_rgb_chart.json --image "<JobDir\<darbas>.CJB\EPS-Data\*.png>"
+   ```
+   `--image`: būtent tas PNG, kurį gavo ColorGate (jei jis buvo sumažintas, langelių pozicijos perskaičiuojamos).
+
+Dabartinė lentelė išmatuota iš `Container - image-1792312558838_1_1_1.prn` (lentelė buvo sumažinta iki 1529×2000).
+
+**Tamsių tonų lentelė (rekomenduojama):** `rgb-chart --kind dark` (11³ spalvų 0–96, jau sukurta:
+`flora_rgb_chart_dark.png`). Paleiskite per „POD F2“ ir pridėkite prie esamų matavimų su `--add`:
 
 ```
-python -m colorgate_prn bundle --job-settings "C:\ProgramData\ColorGATE Software\Productionserver10\JobDir\GUNSJET 2513\<darbas>.CJB\settings.xml" --out colorgate_prn/bundle_gunsjet
+python -m colorgate_prn calibrate-rgb --add --bundle colorgate_prn/bundle_flora --prn "<PRN>" ^
+       --chart flora_rgb_chart_dark.json --image "<JobDir\<darbas>.CJB\EPS-Data\*.png>"
 ```
 
-## Kalibracija (tikslus rastras)
+Modelis tada naudoja 20 lygių tinklelį (abiejų lentelių lygių sąjunga).
 
-1. `python -m colorgate_prn chart --out chart.tif`. Sukuriami `chart.tif` ir `chart.json`.
-2. `chart.tif` per ColorGate su tais pačiais nustatymais, išvestis į failą (spausdinti nereikia).
-3. `python -m colorgate_prn calibrate --prn chart.prn --chart chart.json`.
-   Įrašomas tikslus `data/SpeedScreen_256x448px.*`. Įvertinta versija lieka `..._estimated`.
+Dabartiniame bundle yra abi: pagrindinė (`Container - image-1792312558838_1_1_1.prn`) ir tamsi
+(`flora_rgb_chart_dark_1_1_1.prn`, suripinta ranka su POD F1 nustatymais, originalaus dydžio — matavimas
+darbo dydį atpažįsta pats). Persidengiančios spalvos abiejose lentelėse sutampa ±0,0003.
 
-## Palyginimas
+### Bundle sukūrimas iš naujo (pasikeitus profiliui, .ccx ar hotfolder'iui)
+
+```
+python -m colorgate_prn bundle --job-settings "C:\ProgramData\ColorGATE Software\Productionserver23\JobDir\GUNSJET 2513\<darbas>.CJB\settings.xml" --out colorgate_prn/bundle_flora
+```
+
+Po to būtinai paleiskite kalibraciją iš naujo, nes `bundle` lentelės nesukuria.
+
+## GUNSJET 2513 (senas, Productionserver 10)
+
+```
+python -m colorgate_prn generate --bundle colorgate_prn/bundle_gunsjet --layout layout_example.json --out lapas.prn
+```
+
+Grandinė: TIF CMYK → USWebCoatedSWOP → „Kingt 720x1200 M+ 300.icm“ (rel. kolorimetrinis + BPC) → Y kreivė →
+Lin2 → C/M skaidymas → Lin1 → lašai; W spot → DeviceWhite; Speed Screen 256×448
+(`data/SpeedScreen_256x448px.*`, kanalų ofsetai `"offsets"`). Tiksli matrica:
+`chart` → ColorGate → `calibrate` (žr. `calibrate.py`). Identiški px: 99,5–99,99 %.
+
+## Kitos komandos
 
 ```
 python -m colorgate_prn compare colorgate.prn mano.prn
+python -m colorgate_prn info failas.prn
 ```
 
 ## Ko neatkurta
 
-* **BMP:** ColorGate BMP beveik tuščias. Čia daroma paprasta spalvota miniatiūra (500 px pločio).
-* **Antraštė:** laukų 0x1C, 0x20 ir 0x2C prasmė nežinoma, juose visada 0.
-* **Spalvos:** ±1/255 skirtumai, nes LittleCMS skaičiuoja 8 bitais, o ColorGate turi savo CMM.
+* **Flora taškų vietos:** tikslus ColorGate klaidų difuzijos variantas (kraštai, tono kvantavimas) nežinomas.
+* **BMP:** paprasta spalvota miniatiūra (500 px pločio, kaip ColorGate), turinys kitoks.
+* **Antraštė:** laukų 0x1C, 0x20 ir 0x2C prasmė nežinoma, ten visada 0.

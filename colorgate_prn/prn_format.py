@@ -40,9 +40,9 @@ CHANNELS = ("C", "M", "Y", "K", "Lc", "Lm", "W")
 
 
 def bytes_per_line(width: int, bits: int = 2) -> int:
-    """ceil(width*bits/8) rounded up to a multiple of 8 bytes (4693 -> 4696 in the sample)."""
+    """ceil(width*bits/8) rounded up to a multiple of 4 bytes (4693 -> 4696, 6025 -> 6028, 3041 -> 3044)."""
     raw = (width * bits + 7) // 8
-    return (raw + 7) // 8 * 8
+    return (raw + 3) // 4 * 4
 
 
 @dataclass
