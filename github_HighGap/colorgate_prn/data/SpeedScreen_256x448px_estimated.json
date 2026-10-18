@@ -1,0 +1,33 @@
+{
+ "offsets": {
+  "C": [
+   6,
+   440
+  ],
+  "M": [
+   254,
+   16
+  ],
+  "Y": [
+   22,
+   0
+  ],
+  "K": [
+   246,
+   432
+  ],
+  "Lc": [
+   254,
+   0
+  ],
+  "Lm": [
+   22,
+   440
+  ],
+  "W": [
+   6,
+   16
+  ]
+ },
+ "note": "ESTIMATED from 2681 test 2vnt_1_1_1.prn (~98.5% cells exact); run calibrate to make exact"
+}
