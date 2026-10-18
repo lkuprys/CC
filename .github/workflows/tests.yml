@@ -18,6 +18,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Sistemos bibliotekos Qt (be ekrano)
+        run: sudo apt-get update -q && sudo apt-get install -y -q libegl1 libgl1 libxkbcommon0 libfontconfig1
+
       - name: Įdiegti bibliotekas
         run: |
           python -m pip install --upgrade pip
