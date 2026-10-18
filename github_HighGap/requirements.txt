@@ -1,6 +1,0 @@
-numpy
-scipy
-pillow
-tifffile
-imagecodecs
-numba

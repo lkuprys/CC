@@ -82,6 +82,32 @@ generate_prn(jobs, "lapas.prn", s, page_width=24100)                        # su
 lygio per mažai.) Tonai (rašalo kiekis plote) sutampa, atskiri taškai — ne: klaidų difuzija chaotiška,
 vos kitokia tono reikšmė duoda kitas taškų vietas.
 
+### Aukšto tarpo režimas (`--high-gap`)
+
+Kai galvutės nuo paviršiaus 3–4 mm (pvz., nuo UV šilumos išsipūtę safiano sleeve'ai):
+
+```
+python -m colorgate_prn generate --bundle colorgate_prn/bundle_flora --layout layout_flora.json --out lapas.prn --high-gap
+```
+
+* **Be mažų lašų** (`--drops 0,2,3`). Tas pats rašalo kiekis sudedamas perpus mažesniu kiekiu vidutinių lašų,
+  kurie skrenda tiesiau ir mažiau virsta „rūku“. Klaidų difuzija išlaiko vidutinį lygį (rašalo tūrį).
+  ColorGate šiems vaizdams beveik vien mažus lašus naudoja (testo PRN: 98 % visų lašų).
+* **Šviesus fonas lieka kaip ColorGate** (`--small-below 0.05`). Profilis baltoms vietoms deda šviesiai
+  pilką melsvą foną (~1,1 % K, 1,7 % Lc, 1,3 % Lm). Tokie šviesūs tonai toliau spausdinami mažais lašais.
+* Bandymas ant safiano sleeve'ų 3–4 mm aukštyje: maždaug +1,5–2 mm naudojamo tarpo, tik lengvas šešėlis į šoną.
+  Pirmoje versijoje fonas buvo nuimtas (`--floor 0.03`), todėl dingo. Dabar `--floor` pagal nutylėjimą 0,
+  jo nenaudokite, jei fonas reikalingas.
+* Prielaida: vidutinis lašas ≈ 2 maži (KM1024i 6/12/18 pL).
+
+Variantai (vidutinis lygis visuose kaip ColorGate: M 0.0199, Y 0.0434, K 0.100, Lc 0.0604, Lm 0.0579):
+
+| failas | komanda | fonas | likęs vaizdas |
+|---|---|---|---|
+| `mano_flora.prn` | (be parinkčių) | maži lašai | maži lašai (kaip ColorGate) |
+| `mano_flora_highgap.prn` | `--high-gap` | maži lašai, identiškas ColorGate | vidutiniai lašai |
+| `mano_flora_highgap_B.prn` | `--drops 0,2,3` | vidutiniai lašai (perpus rečiau) | vidutiniai lašai |
+
 ### Kalibracija (spalvos)
 
 1. `python -m colorgate_prn rgb-chart --out flora_rgb_chart.png` (2339×3059 px, kaip tikri darbai).

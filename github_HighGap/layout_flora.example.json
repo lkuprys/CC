@@ -1,7 +1,0 @@
-{
-  "container": {"gap_mm": 221.2, "top_mm": 26.5, "page_width_mm": 850.2},
-  "jobs": [
-    {"image": "pirmas_darbas.png"},
-    {"image": "antras_darbas.png"}
-  ]
-}

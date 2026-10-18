@@ -211,20 +211,32 @@ class JobRaster:
         return np.stack([self.screen.apply(t[..., ci], ch, 0, y0) for ci, ch in enumerate(self.s.channels)], -1)
 
 
-def make_screen(setup: ColorGateSetup, screen=None):
+# HighGap: print head far from the media (3-4 mm, heat-bulged safian sleeves).  No small drops except the
+# very light background tint (tone < 0.05 keeps ColorGate's small-drop tint); same ink volume otherwise.
+# Chosen on a print test ("variant A"): ~1.5-2 mm more usable gap, background tint identical to ColorGate.
+HIGH_GAP = {"allowed_levels": (0, 2, 3), "small_below": 0.05, "floor": 0.0}
+
+
+def make_screen(setup: ColorGateSetup, screen=None, high_gap: bool = False):
     if screen is not None:
         return screen
     if setup.screen_type == "error_diffusion":
         from .diffusion import ErrorDiffusion
-        return ErrorDiffusion()
+        return ErrorDiffusion(**HIGH_GAP) if high_gap else ErrorDiffusion()
+    if high_gap:
+        raise ValueError("HighGap needs an error diffusion bundle (e.g. bundle_flora)")
     return Screen.load(setup.screen)
 
 
 def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen=None,
                  page_width: int | None = None, page_height: int | None = None,
-                 bmp_path: str | None = "auto", strip: int = 448, progress=None) -> dict:
-    """Render jobs onto one page and write PRN (+ BMP thumbnail next to it when bmp_path == 'auto')."""
-    screen = make_screen(setup, screen)
+                 bmp_path: str | None = "auto", strip: int = 448, progress=None,
+                 high_gap: bool = False) -> dict:
+    """Render jobs onto one page and write PRN (+ BMP thumbnail next to it when bmp_path == 'auto').
+
+    high_gap=True: HighGap mode (see HIGH_GAP), for printing with the head 3-4 mm above the media.
+    """
+    screen = make_screen(setup, screen, high_gap)
     pipe = ColorPipeline(setup)
     # Job sizes come from the image headers; a raster (decoded image + resampler + screen state) exists
     # only while the strips cross its job, so memory does not grow with the number of jobs on the page.

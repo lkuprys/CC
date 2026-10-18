@@ -1,4 +1,4 @@
-"""HighGap acceptance test: python -m pytest tests  (or: python tests/test_high_gap.py)
+"""HighGap priėmimo testas (iš github_HighGap): python -m pytest tests/test_high_gap.py
 
 Synthetic job: white background + mid grey square + dark square.  Checks that HighGap
 * prints no small drops (level 1) where the tone is >= 0.05 (grey / dark squares),
@@ -13,6 +13,9 @@ import numpy as np
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+pytest = __import__("pytest")
+pytest.importorskip("numba")
 sys.path.insert(0, ROOT)
 
 from colorgate_prn import ColorGateSetup, Job, generate_prn, read_prn  # noqa: E402

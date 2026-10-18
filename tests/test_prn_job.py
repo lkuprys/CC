@@ -195,3 +195,42 @@ def test_generate_prn_for_flora_png(core, tmp_path, monkeypatch):
     assert (hdr.xdpi, hdr.ydpi, hdr.channels) == (720, 1800, 6)
     assert hdr.width == px(5, 720) * 2 + px(2, 720)
     assert levels.any()
+
+
+def test_high_gap_flag_per_printer(core, tmp_path, monkeypatch):
+    assert prn_job.printer_supports_high_gap("flora", {}) is True
+    assert prn_job.printer_supports_high_gap("gunsjet", {}) is False
+    assert prn_job.model_prn_settings({"prn": {"units": "mm"}})["high_gap"] is False
+    # GUNSJET su įjungtu HighGap – įspėjimas ir įprastas failas (be _HG)
+    np = pytest.importorskip("numpy")
+    tifffile = pytest.importorskip("tifffile")
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    tifffile.imwrite(str(src / "1001_a.tif"), np.full((20, 20, 4), 100, np.uint8), photometric="separated",
+                     resolution=(300, 300), resolutionunit=2)
+    plan = {"source_dir": str(src), "search_network": False, "out_dir": str(out), "cols": 1,
+            "prn": dict(prn_job.PRN_DEFAULTS, high_gap=True),
+            "beds": [{"bed_idx": 0, "title": "G", "items": ["PID-1001"]}]}
+    res = prn_job.run_prn_job(plan)
+    assert len(res["files"]) == 1 and "_HG" not in res["files"][0]["path"]
+    assert any("HighGap" in w for w in res["warnings"]) and res["high_gap"] is False
+
+
+def test_high_gap_flora_file_suffix(core, tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("numba")
+    from PIL import Image
+    import colorgate_prn
+
+    real_load = colorgate_prn.ColorGateSetup.load_bundle.__func__
+    monkeypatch.setattr(colorgate_prn.ColorGateSetup, "load_bundle",
+                        classmethod(lambda cls, f: (lambda s: (setattr(s, "dest_mm", (5.0, 4.0)), s)[1])(real_load(cls, f))))
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    Image.fromarray(np.full((40, 30, 3), (120, 120, 130), np.uint8)).save(str(src / "1001_f.png"))
+    plan = {"source_dir": str(src), "search_network": False, "out_dir": str(out), "cols": 1,
+            "prn": dict(prn_job.PRN_DEFAULTS, printer="flora", high_gap=True),
+            "beds": [{"bed_idx": 0, "title": "F", "items": ["PID-1001"]}]}
+    res = prn_job.run_prn_job(plan)
+    assert res["errors"] == [] and res["high_gap"] is True
+    assert res["files"][0]["path"].endswith("_HG.prn") and res["files"][0]["high_gap"] is True

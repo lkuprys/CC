@@ -39,6 +39,14 @@ def main(argv=None):
     g.add_argument("--page-height", type=float)
     g.add_argument("--screen", help="screen name in colorgate_prn/data (default from bundle)")
     g.add_argument("--no-bmp", action="store_true")
+    g.add_argument("--high-gap", action="store_true",
+                   help="head far from the media (e.g. 3-4 mm, bulging sleeves): no small drops (= --drops 0,2,3), "
+                        "except the very light background tint (= --small-below 0.05); error diffusion screens only")
+    g.add_argument("--drops", help="allowed drop levels, e.g. 0,2,3 (error diffusion screens only)")
+    g.add_argument("--small-below", type=float,
+                   help="tones below this still use small drops (level units; 0.05 keeps the light background tint)")
+    g.add_argument("--floor", type=float,
+                   help="drop tones below this are not printed (removes the light background tint! default 0)")
     g.add_argument("--out", required=True)
 
     c = sub.add_parser("compare"); c.add_argument("a"); c.add_argument("b")
@@ -86,6 +94,17 @@ def main(argv=None):
         ph = toy(a.page_height) if a.page_height else ph
         from .generator import make_screen
         screen = Screen.load(a.screen) if a.screen else make_screen(s)
+        if a.high_gap or a.drops or a.floor is not None or a.small_below is not None:
+            from .diffusion import ErrorDiffusion
+            if not isinstance(screen, ErrorDiffusion):
+                ap.error("--high-gap/--drops/--floor/--small-below need an error diffusion bundle (e.g. bundle_flora)")
+            from .generator import HIGH_GAP
+            hg = HIGH_GAP if a.high_gap else {"allowed_levels": (0, 1, 2, 3), "small_below": 0.0, "floor": 0.0}
+            drops = tuple(int(v) for v in a.drops.split(",")) if a.drops else hg["allowed_levels"]
+            floor = a.floor if a.floor is not None else hg["floor"]
+            small = a.small_below if a.small_below is not None else hg["small_below"]
+            screen = ErrorDiffusion(allowed_levels=drops, floor=floor, small_below=small)
+            print(f"error diffusion: drop levels {drops}, small drops below tone {small}, floor {floor}")
         t0 = time.time()
         info = generate_prn(jobs, a.out, s, screen, pw, ph, bmp_path=None if a.no_bmp else "auto",
                             progress=lambda y, h: print(f"\r{y}/{h} lines", end="", file=sys.stderr))

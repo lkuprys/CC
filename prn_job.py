@@ -32,6 +32,7 @@ PRN_DEFAULTS = {
     "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
     "units": "mm",
     "printer": DEFAULT_PRINTER,
+    "high_gap": False,          # HighGap: be mažų lašų (tik klaidų difuzijos spausdintuvams, pvz. Flora)
     "origin": "bottom_left",
     "row_direction": "right_to_left",   # kaip Container Studio; arba "left_to_right"
     "table_width": 0.0,        # mm; 0 → stulpelių tiek, kiek rėme
@@ -92,6 +93,7 @@ def model_prn_settings(model):
     if out.get("origin") not in PRN_ORIGINS:
         out["origin"] = "bottom_left"
     out["printer"] = str(out.get("printer") or DEFAULT_PRINTER)
+    out["high_gap"] = bool(out.get("high_gap"))
     if out.get("row_direction") not in PRN_ROW_DIRECTIONS:
         out["row_direction"] = "right_to_left"
     out["include_print_offset"] = bool(out["include_print_offset"])
@@ -151,6 +153,22 @@ def printer_bundle_dir(printer, cfg=None):
 
 def default_bundle_dir():
     return printer_bundle_dir(DEFAULT_PRINTER, {})
+
+
+_screen_types = {}
+
+
+def printer_supports_high_gap(printer, cfg=None):
+    """HighGap galimas tik spausdintuvams su klaidų difuzija (setup.json → screen_type)."""
+    folder = printer_bundle_dir(printer, cfg)
+    if folder not in _screen_types:
+        try:
+            import json
+            with open(os.path.join(folder, "setup.json"), encoding="utf-8") as f:
+                _screen_types[folder] = json.load(f).get("screen_type", "speedscreen")
+        except (OSError, ValueError):
+            return False
+    return _screen_types[folder] == "error_diffusion"
 
 
 def printer_name(printer, cfg=None):
@@ -304,7 +322,8 @@ def run_prn_job(plan, progress=None):
         started = time.time()
         res = _run_prn_job(plan, progress)
         log.info(
-            f".prn: {len(plan.get('beds', []))} stal., failų {len(res['files'])}, nerasta {len(res['missing'])}, "
+            f".prn{' (HighGap)' if res.get('high_gap') else ''}: {len(plan.get('beds', []))} stal., "
+            f"failų {len(res['files'])}, nerasta {len(res['missing'])}, "
             f"klaidų {len(res['errors'])} → {plan.get('out_dir')} ({time.time() - started:.1f} s, "
             f"paieška {res.get('search_seconds', 0):.1f} s)"
         )
@@ -337,14 +356,19 @@ def _run_prn_job(plan, progress=None):
     settings = plan["prn"]
     bundle = plan.get("bundle_dir") or printer_bundle_dir(settings.get("printer"))
     setup = ColorGateSetup.load_bundle(bundle)
-    screen = make_screen(setup)
+    high_gap = bool(settings.get("high_gap"))
+    if high_gap and setup.screen_type != "error_diffusion":
+        result["warnings"].append("HighGap šiam spausdintuvui netaikomas (jis be klaidų difuzijos) – generuojama įprastai.")
+        high_gap = False
+    result["high_gap"] = high_gap
+    screen = make_screen(setup, high_gap=high_gap)
     takes_rgb = bool(setup.rgb_input_profile or setup.rgb_lut)
     allowed = RGB_EXTENSIONS if takes_rgb else CMYK_EXTENSIONS
     kinds = "PNG / JPG / TIF" if takes_rgb else "TIF"
     out_dir = settings.get("output_dir") or plan.get("out_dir") or default_output_dir()
     os.makedirs(out_dir, exist_ok=True)
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M") + ("_HG" if high_gap else "")
     used = set()
     for b in plan["beds"]:
         bed_no = b["bed_idx"] + 1
@@ -420,7 +444,7 @@ def _run_prn_job(plan, progress=None):
             continue
         result["placed"] += len(jobs)
         result["files"].append({
-            "bed_idx": b["bed_idx"], "path": final, "bmp": bmp, "designs": len(jobs),
+            "bed_idx": b["bed_idx"], "path": final, "bmp": bmp, "designs": len(jobs), "high_gap": high_gap,
             "width_mm": round(page_w / setup.xdpi * 25.4, 1), "height_mm": round(page_h / setup.ydpi * 25.4, 1),
         })
     return result

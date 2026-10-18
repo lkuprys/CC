@@ -1544,7 +1544,8 @@ class ContainerStudioInterface(QWidget):
             "table_mm": (float(cfg.get("table_width_mm") or 2500), float(cfg.get("table_height_mm") or 1300)),
             "beds": beds_plan,
             "model_name": m_data.get("name", ""),
-            "printer_name": prn_job.printer_name(settings["printer"], cfg),
+            "printer_name": prn_job.printer_name(settings["printer"], cfg)
+                            + (" · HighGap" if settings["high_gap"] and prn_job.printer_supports_high_gap(settings["printer"], cfg) else ""),
         }, None
 
     def generate_prn_file(self, scheduled=False):
@@ -2262,11 +2263,23 @@ class ModelsSettingsInterface(QWidget):
 
         self.combo_m_printer = ComboBox(parent_widget)
         self.combo_m_printer.currentIndexChanged.connect(self.on_model_edited)
+        self.combo_m_printer.currentIndexChanged.connect(self._update_high_gap_state)
         self.populate_printer_combo()
         detail_layout.addLayout(self._field(
             parent_widget, "Spausdintuvas", self.combo_m_printer,
             "Pagal kurio spausdintuvo nustatymus generuojamas .prn: spalvos, raiška, kanalai, rastras ir darbo dydis. "
             "GUNSJET – CMYK TIF failai, Flora – RGB PNG (kiekvienas darbas 200 × 261 mm, pasuktas 180°)."))
+
+        self.chk_m_high_gap = CheckBox("HighGap – be mažų lašų", parent_widget)
+        self.chk_m_high_gap.toggled.connect(self.on_model_edited)
+        self.lbl_m_high_gap_hint = CaptionLabel("", parent_widget)
+        self.lbl_m_high_gap_hint.setWordWrap(True)
+        hg_box = QVBoxLayout()
+        hg_box.setSpacing(6)
+        hg_box.addWidget(FieldLabel("Galvutė toli nuo paviršiaus", parent_widget))
+        hg_box.addWidget(self.chk_m_high_gap)
+        hg_box.addWidget(self.lbl_m_high_gap_hint)
+        detail_layout.addLayout(hg_box)
 
         prn_form = QGridLayout()
         prn_form.setHorizontalSpacing(16)
@@ -2673,6 +2686,17 @@ class ModelsSettingsInterface(QWidget):
             repo_slug = self.edit_github_repo.text().strip() or DEFAULT_GITHUB_REPO
             self.updater.check_for_updates(repo_slug=repo_slug, manual=True)
 
+    def _update_high_gap_state(self):
+        ok = prn_job.printer_supports_high_gap(self.combo_m_printer.currentData() or prn_job.DEFAULT_PRINTER)
+        self.chk_m_high_gap.setEnabled(ok)
+        if ok:
+            self.lbl_m_high_gap_hint.setText(
+                "Kai paviršius išsipučia ir tarpas iki galvučių 3–4 mm (pvz. safiano sleeve'ai): vietoj mažų lašų "
+                "dedami vidutiniai – rašalo tiek pat, lašai skrenda tiesiau, mažiau „rūko“. Labai šviesus fonas "
+                "lieka kaip ColorGATE. Failo pavadinime – _HG.")
+        else:
+            self.lbl_m_high_gap_hint.setText("Galima tik spausdintuvams su klaidų difuzija (Flora XTRA2512UV).")
+
     def populate_printer_combo(self):
         current = self.combo_m_printer.currentData()
         self.combo_m_printer.blockSignals(True)
@@ -2757,6 +2781,10 @@ class ModelsSettingsInterface(QWidget):
                 p_idx = self.combo_m_printer.count() - 1
             self.combo_m_printer.setCurrentIndex(p_idx)
             self.combo_m_printer.blockSignals(False)
+            self.chk_m_high_gap.blockSignals(True)
+            self.chk_m_high_gap.setChecked(prn["high_gap"])
+            self.chk_m_high_gap.blockSignals(False)
+            self._update_high_gap_state()
             self.combo_m_prn_rows.blockSignals(True)
             self.combo_m_prn_rows.setCurrentIndex(max(0, self.combo_m_prn_rows.findData(prn["row_direction"])))
             self.combo_m_prn_rows.blockSignals(False)
@@ -2817,6 +2845,7 @@ class ModelsSettingsInterface(QWidget):
             prn["origin"] = self.combo_m_prn_origin.currentData() or "bottom_left"
             prn["row_direction"] = self.combo_m_prn_rows.currentData() or "right_to_left"
             prn["printer"] = self.combo_m_printer.currentData() or prn_job.DEFAULT_PRINTER
+            prn["high_gap"] = self.chk_m_high_gap.isChecked()
             prn["output_dir"] = self.edit_m_prn_out.text().strip()
             m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")
