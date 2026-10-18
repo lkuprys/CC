@@ -9,7 +9,8 @@ Koordinatės (kaip ColorGATE konteineryje), milimetrais:
   height                    – spausdinimo aukštis (tik informacija operatoriui).
 Atskaitos kampas (origin, numatyta kairė apačia) – nuo jo matuojamas Print X/Y; eilės skaičiuojamos
 nuo jo (i // cols), o eilėje dizainai dedami iš dešinės į kairę (kaip Container Studio) arba atvirkščiai.
-Modelio stalo dydis (table_width/height) nurodo plotą, į kurį dizainai turi sutilpti.
+Modelio stalo dydis (table_width/height) nurodo plotą, į kurį dizainai turi sutilpti. Kampas ir kryptis –
+kaip ant stalo; spausdintuvas failą apverčia kairė ↔ dešinė, todėl faile viskas veidrodiškai (mirror_x).
 
 Modulis be Qt – testuojamas be PySide6. numpy/tifffile importuojami tik generuojant.
 """
@@ -34,6 +35,7 @@ PRN_DEFAULTS = {
     "printer": DEFAULT_PRINTER,
     "high_gap": False,          # HighGap: be mažų lašų (tik klaidų difuzijos spausdintuvams, pvz. Flora)
     "origin": "bottom_left",
+    "mirror_x": True,          # spausdintuvas apverčia failą kairė ↔ dešinė
     "row_direction": "right_to_left",   # kaip Container Studio; arba "left_to_right"
     "table_width": 0.0,        # mm; 0 → stulpelių tiek, kiek rėme
     "table_height": 0.0,       # mm; 0 → eilių neribojama
@@ -94,6 +96,7 @@ def model_prn_settings(model):
         out["origin"] = "bottom_left"
     out["printer"] = str(out.get("printer") or DEFAULT_PRINTER)
     out["high_gap"] = bool(out.get("high_gap"))
+    out["mirror_x"] = bool(out.get("mirror_x", True))
     if out.get("row_direction") not in PRN_ROW_DIRECTIONS:
         out["row_direction"] = "right_to_left"
     out["include_print_offset"] = bool(out["include_print_offset"])
@@ -253,7 +256,10 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
 
     rtl = settings.get("row_direction", "right_to_left") == "right_to_left"
     n_total = max(idx for idx, _, _ in slots) + 1
-    block_w = cols * cell_w + (cols - 1) * gap_x
+    # Tik tiek stulpelių, kiek jų iš tikrųjų užimta (2 dizainai 5 vietų rėme – 2 stulpeliai),
+    # kad tuščios rėmo vietos nepatektų į failą kaip didelis tarpas
+    cols_used = min(cols, n_total)
+    block_w = cols_used * cell_w + (cols_used - 1) * gap_x
     origin = settings.get("origin", "bottom_left")
     right, top = origin.endswith("_right"), origin.startswith("top_")
 
@@ -264,12 +270,7 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
         if rows_max is not None and row >= rows_max:
             overflow.append(idx)
             continue
-        if not rtl:
-            c = k
-        elif row == 0 and n_total < cols:
-            c = n_total - 1 - k          # nepilna pirma eilė – kaip Studijoje, prie kairiojo krašto
-        else:
-            c = cols - 1 - k
+        c = cols_used - 1 - k if rtl else k   # nepilna paskutinė eilė (iš dešinės) – prie dešiniojo krašto
         left = c * step_x                # nuo bloko kairiojo krašto
         dx = x0 + (block_w - left - cell_w if right else left)
         placed.append((idx, dx, y0 + row * step_y, w, h))
@@ -283,6 +284,11 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
     page_h = max(dy + h for _, _, dy, _, h in placed)
     positions = {idx: (page_w - dx - w if right else dx, dy if top else page_h - dy - h)
                  for idx, dx, dy, w, h in placed}
+    # Spausdintuvas failą apverčia kairė ↔ dešinė: kampas ir eilių kryptis nurodomi taip, kaip ant stalo,
+    # o faile viskas veidrodiškai (pvz. „Kairė viršus“ → faile paraštės dešinėje ir viršuje)
+    if settings.get("mirror_x", True):
+        widths = {idx: w for idx, _, _, w, _ in placed}
+        positions = {idx: (page_w - x - widths[idx], y) for idx, (x, y) in positions.items()}
 
     by_idx = sorted(placed)
     for a in range(len(by_idx)):

@@ -2255,6 +2255,7 @@ class ModelsSettingsInterface(QWidget):
         prn_hint = CaptionLabel(
             "Naudojama mygtukui „Generuoti .prn“ ir tvarkaraščiui. Konteineris X/Y – tarpas tarp gretimų "
             "dizainų (nuo vieno krašto iki kito), Print X/Y – kiek dizainai atitraukti nuo atskaitos kampo. "
+            "Kampas ir eilių kryptis – kaip ant stalo. Faile – tik dizainai ir Print paraštės. "
             "Stalo plotis/aukštis – plotas, į kurį turi sutilpti dizainai (0 – pagal rėmą). Visos reikšmės milimetrais.",
             parent_widget)
         prn_hint.setWordWrap(True)
@@ -2311,7 +2312,14 @@ class ModelsSettingsInterface(QWidget):
                                          "Išjungta – failas prasideda nuo pirmo dizaino, o pradžios taškas "
                                          "nustatomas spausdintuve.")
         self.chk_m_prn_offset.toggled.connect(self.on_model_edited)
-        prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 3, 0, 1, 3)
+        prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 3, 0, 1, 2)
+
+        self.chk_m_prn_mirror = CheckBox("Spausdintuvas apverčia failą", parent_widget)
+        self.chk_m_prn_mirror.setToolTip("Įjungta – atskaitos kampas ir eilių kryptis nurodomi taip, kaip ant stalo, "
+                                         "o faile išdėstoma veidrodiškai (kairė ↔ dešinė), nes spausdintuvas failą "
+                                         "apverčia.\nPvz. „Kairė viršus“ → faile Print paraštės dešinėje ir viršuje.")
+        self.chk_m_prn_mirror.toggled.connect(self.on_model_edited)
+        prn_form.addLayout(self._field(parent_widget, "Kairė ↔ dešinė", self.chk_m_prn_mirror), 3, 2)
 
         self.combo_m_prn_rows = ComboBox(parent_widget)
         for key, text in prn_job.PRN_ROW_DIRECTIONS.items():
@@ -2771,6 +2779,9 @@ class ModelsSettingsInterface(QWidget):
             self.chk_m_prn_offset.blockSignals(True)
             self.chk_m_prn_offset.setChecked(prn["include_print_offset"])
             self.chk_m_prn_offset.blockSignals(False)
+            self.chk_m_prn_mirror.blockSignals(True)
+            self.chk_m_prn_mirror.setChecked(prn["mirror_x"])
+            self.chk_m_prn_mirror.blockSignals(False)
             self.combo_m_prn_origin.blockSignals(True)
             self.combo_m_prn_origin.setCurrentIndex(max(0, self.combo_m_prn_origin.findData(prn["origin"])))
             self.combo_m_prn_origin.blockSignals(False)
@@ -2841,6 +2852,7 @@ class ModelsSettingsInterface(QWidget):
             m["search_network"] = self.chk_m_network.isChecked()
             prn = {key: round(spin.value(), 2) for key, spin in self.prn_spins.items()}
             prn["include_print_offset"] = self.chk_m_prn_offset.isChecked()
+            prn["mirror_x"] = self.chk_m_prn_mirror.isChecked()
             prn["units"] = "mm"
             prn["origin"] = self.combo_m_prn_origin.currentData() or "bottom_left"
             prn["row_direction"] = self.combo_m_prn_rows.currentData() or "right_to_left"

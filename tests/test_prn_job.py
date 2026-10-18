@@ -8,7 +8,7 @@ import pytest
 import prn_job
 
 S = dict(prn_job.PRN_DEFAULTS, container_x=100.0, container_y=50.0, print_x=20.0, print_y=10.0,
-         row_direction="left_to_right")
+         row_direction="left_to_right", mirror_x=False)
 
 
 def px(mm, dpi):
@@ -135,7 +135,7 @@ def test_generate_prn_for_bed(core, tmp_path):
     plan = {
         "source_dir": str(src), "search_network": False, "out_dir": str(out), "cols": 2,
         "prn": dict(prn_job.PRN_DEFAULTS, container_x=10.0, container_y=10.0, print_x=5.0, print_y=2.0,
-                    row_direction="left_to_right"),
+                    row_direction="left_to_right", mirror_x=False),
         "beds": [{"bed_idx": 0, "title": "BID-7", "items": ["PID-1001", None, "PID-1002", "PID-1003", "PID-9"]}],
     }
     plan["prn"]["output_dir"] = str(tmp_path / "modelio")   # modelio aplankas svarbesnis už bendrą
@@ -234,3 +234,31 @@ def test_high_gap_flora_file_suffix(core, tmp_path, monkeypatch):
     res = prn_job.run_prn_job(plan)
     assert res["errors"] == [] and res["high_gap"] is True
     assert res["files"][0]["path"].endswith("_HG.prn") and res["files"][0]["high_gap"] is True
+
+
+def test_users_case_two_designs_top_right_mirrored():
+    # Kaip ekrano nuotraukoje: 2 dizainai 5 vietų rėme, „Dešinė viršus“, iš dešinės, tarpas 42.2 mm,
+    # print 2.9 / 24.2 mm. 1 mm = 10 px (dpi 254), dizainas 100 x 50 px.
+    s = dict(prn_job.PRN_DEFAULTS, container_x=42.2, container_y=27.8, print_x=2.9, print_y=24.2,
+             origin="top_right", row_direction="right_to_left")
+    pos, w, h, _, ov = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 5, s, 254, 254)
+    gap, x0, y0 = 422, 29, 242
+    assert ov == [] and w == x0 + 100 + gap + 100 and h == y0 + 50   # tik dizainai + paraštės, ne visas rėmas
+    # Ant stalo: paraštės dešinėje ir viršuje, 01 dešinėje. Faile (spausdintuvas apverčia) – veidrodiškai:
+    assert pos[0] == (x0, y0) and pos[1] == (x0 + 100 + gap, y0)
+
+
+def test_top_left_puts_margins_right_and_top_in_file():
+    s = dict(prn_job.PRN_DEFAULTS, container_x=10.0, print_x=30.0, print_y=50.0, origin="top_left",
+             row_direction="left_to_right")
+    pos, w, h, _, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 5, s, 254, 254)
+    assert (w, h) == (300 + 100 + 100 + 100, 500 + 50)
+    assert pos[0] == (w - 300 - 100, 500)          # faile: 30 mm tuščia dešinėje, 50 mm viršuje
+    assert max(x + 100 for x, _ in pos.values()) == w - 300
+
+
+def test_mirror_can_be_turned_off():
+    s = dict(prn_job.PRN_DEFAULTS, container_x=10.0, print_x=30.0, print_y=50.0, origin="top_left",
+             row_direction="left_to_right", mirror_x=False)
+    pos, _, _, _, _ = prn_job.layout_bed([(0, 100, 50)], 5, s, 254, 254)
+    assert pos[0] == (300, 500)
