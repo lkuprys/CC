@@ -2250,8 +2250,8 @@ class ModelsSettingsInterface(QWidget):
         prn_head.addWidget(StrongBodyLabel("Spausdinimo failas (.prn)", parent_widget))
         prn_hint = CaptionLabel(
             "Naudojama mygtukui „Generuoti .prn“ ir tvarkaraščiui. Konteineris X/Y – tarpas tarp gretimų "
-            "dizainų (nuo vieno krašto iki kito), Print X/Y – kiek dizainai atitraukti nuo atskaitos kampo; "
-            "tame kampe stovi ir pirmas dizainas. Visos reikšmės milimetrais.",
+            "dizainų (nuo vieno krašto iki kito), Print X/Y – kiek dizainai atitraukti nuo atskaitos kampo. "
+            "Stalo plotis/aukštis – plotas, į kurį turi sutilpti dizainai (0 – pagal rėmą). Visos reikšmės milimetrais.",
             parent_widget)
         prn_hint.setWordWrap(True)
         prn_head.addWidget(prn_hint)
@@ -2267,10 +2267,18 @@ class ModelsSettingsInterface(QWidget):
                                      ("container_y", "Konteineris Y (tarpas)", 0, 1),
                                      ("height", "Aukštis", 0, 2),
                                      ("print_x", "Print X (atitraukimas)", 1, 0),
-                                     ("print_y", "Print Y (atitraukimas)", 1, 1)):
+                                     ("print_y", "Print Y (atitraukimas)", 1, 1),
+                                     ("table_width", "Stalo plotis", 2, 0),
+                                     ("table_height", "Stalo aukštis", 2, 1)):
             spin = DoubleSpinBox(parent_widget, decimals=1, suffix=" mm")
-            spin.setRange(0, 2500)
+            spin.setRange(0, 5000)
             spin.setSingleStep(0.5)
+            if key.startswith("table_"):
+                spin.setSingleStep(10)
+                spin.setSpecialValueText("Pagal rėmą" if key == "table_width" else "Neribojama")
+                spin.setToolTip("Plotas, į kurį turi sutilpti dizainai (pvz. pusė rėmo). Eilėje dedama tiek "
+                                "dizainų, kiek telpa į plotį; kas netelpa į aukštį – pažymima klaida.\n"
+                                "0 – stulpelių tiek, kiek rėme, eilių neribojama.")
             spin.valueChanged.connect(self.on_model_edited)
             self.prn_spins[key] = spin
             prn_form.addLayout(self._field(parent_widget, label, spin), row, col)
@@ -2279,7 +2287,13 @@ class ModelsSettingsInterface(QWidget):
                                          "Išjungta – failas prasideda nuo pirmo dizaino, o pradžios taškas "
                                          "nustatomas spausdintuve.")
         self.chk_m_prn_offset.toggled.connect(self.on_model_edited)
-        prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 2, 0, 1, 3)
+        prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 3, 0, 1, 3)
+
+        self.combo_m_prn_rows = ComboBox(parent_widget)
+        for key, text in prn_job.PRN_ROW_DIRECTIONS.items():
+            self.combo_m_prn_rows.addItem(text, userData=key)
+        self.combo_m_prn_rows.currentIndexChanged.connect(self.on_model_edited)
+        prn_form.addLayout(self._field(parent_widget, "Eilės pildymas", self.combo_m_prn_rows), 2, 2)
 
         self.combo_m_prn_origin = ComboBox(parent_widget)
         for key, text in prn_job.PRN_ORIGINS.items():
@@ -2298,7 +2312,7 @@ class ModelsSettingsInterface(QWidget):
         btn_prn_out.clicked.connect(lambda: self._browse_into(self.edit_m_prn_out, "Pasirinkite šio modelio .prn aplanką"))
         prn_out_row.addWidget(btn_prn_out)
         prn_form.addLayout(self._field(parent_widget, "Išvesties aplankas (.prn)", prn_out_row,
-                                       "Kur dėti šio modelio .prn failus. Tuščia – bendras aplankas."), 3, 0, 1, 3)
+                                       "Kur dėti šio modelio .prn failus. Tuščia – bendras aplankas."), 4, 0, 1, 3)
         detail_layout.addLayout(prn_form)
         detail_layout.addStretch(1)
 
@@ -2714,6 +2728,9 @@ class ModelsSettingsInterface(QWidget):
             self.combo_m_prn_origin.blockSignals(True)
             self.combo_m_prn_origin.setCurrentIndex(max(0, self.combo_m_prn_origin.findData(prn["origin"])))
             self.combo_m_prn_origin.blockSignals(False)
+            self.combo_m_prn_rows.blockSignals(True)
+            self.combo_m_prn_rows.setCurrentIndex(max(0, self.combo_m_prn_rows.findData(prn["row_direction"])))
+            self.combo_m_prn_rows.blockSignals(False)
             self.edit_m_prn_out.blockSignals(True)
             self.edit_m_prn_out.setText(prn["output_dir"])
             self.edit_m_prn_out.setCursorPosition(0)
@@ -2769,6 +2786,7 @@ class ModelsSettingsInterface(QWidget):
             prn["include_print_offset"] = self.chk_m_prn_offset.isChecked()
             prn["units"] = "mm"
             prn["origin"] = self.combo_m_prn_origin.currentData() or "bottom_left"
+            prn["row_direction"] = self.combo_m_prn_rows.currentData() or "right_to_left"
             prn["output_dir"] = self.edit_m_prn_out.text().strip()
             m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")

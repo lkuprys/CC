@@ -543,11 +543,25 @@ class SearchLineEdit(LineEdit):
         theme_signals.changed.connect(lambda: self._action.setIcon(icon(FIF.SEARCH, tokens()["muted"])))
 
 
-class ComboBox(QComboBox):
+class _NoHoverWheel:
+    """Pelės ratukas reikšmę keičia tik paspaudus ant lauko; užvedus pelę slenkamas puslapis."""
+
+    def _no_hover_wheel_init(self):
+        self.setFocusPolicy(Qt.StrongFocus)  # ratukas lauko neaktyvuoja
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()                   # įvykis keliauja į slenkamą sritį
+
+
+class ComboBox(_NoHoverWheel, QComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(40)
         self.setCursor(Qt.PointingHandCursor)
+        self._no_hover_wheel_init()
 
     def addItem(self, text, icon=None, userData=None):  # noqa: A002 – suderinama su qfluentwidgets
         if isinstance(icon, QIcon):
@@ -556,19 +570,21 @@ class ComboBox(QComboBox):
             super().addItem(text, userData)
 
 
-class SpinBox(QSpinBox):
+class SpinBox(_NoHoverWheel, QSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(40)
         self.lineEdit().setTextMargins(10, 0, 0, 0)  # QSS padding kairėje vidiniam laukui netaikomas
+        self._no_hover_wheel_init()
         tabular(self)
 
 
-class DoubleSpinBox(QDoubleSpinBox):
+class DoubleSpinBox(_NoHoverWheel, QDoubleSpinBox):
     def __init__(self, parent=None, decimals=2, suffix=""):
         super().__init__(parent)
         self.setFixedHeight(40)
         self.lineEdit().setTextMargins(10, 0, 0, 0)
+        self._no_hover_wheel_init()
         self.setDecimals(decimals)
         if suffix:
             self.setSuffix(suffix)

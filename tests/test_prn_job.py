@@ -7,7 +7,8 @@ import pytest
 
 import prn_job
 
-S = dict(prn_job.PRN_DEFAULTS, container_x=100.0, container_y=50.0, print_x=20.0, print_y=10.0)
+S = dict(prn_job.PRN_DEFAULTS, container_x=100.0, container_y=50.0, print_x=20.0, print_y=10.0,
+         row_direction="left_to_right")
 
 
 def px(mm, dpi):
@@ -17,7 +18,7 @@ def px(mm, dpi):
 def test_first_design_bottom_left_and_rows_go_up():
     # 2 x 2 rėmas, 100 x 50 px dizainai, dpi 254 → 1 mm = 10 px; konteineris = tarpas tarp dizainų
     slots = [(0, 100, 50), (1, 100, 50), (2, 100, 50)]
-    pos, w, h, warns = prn_job.layout_bed(slots, 2, S, 254, 254)
+    pos, w, h, warns, _ov = prn_job.layout_bed(slots, 2, S, 254, 254)
     assert w == 200 + 100 + 1000 + 100                  # print X + dizainas + tarpas X + dizainas
     assert h == 100 + 50 + 500 + 50                     # print Y + dizainas + tarpas Y + dizainas
     assert pos[0] == (200, h - (100 + 50))              # apatinė eilė, kairėje
@@ -28,35 +29,73 @@ def test_first_design_bottom_left_and_rows_go_up():
 
 def test_without_print_offset_first_design_at_page_corner():
     s = dict(S, include_print_offset=False)
-    pos, w, h, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254)
+    pos, w, h, _, _ov = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254)
     assert pos[0] == (0, 0) and w == 100 + 1000 + 100 and h == 50
 
 
 @pytest.mark.parametrize("origin, first, second", [
     ("bottom_left", (200, 550), (1300, 550)),     # puslapis 1400 x 700
     ("top_left", (200, 100), (1300, 100)),
-    ("bottom_right", (1100, 550), (0, 550)),
-    ("top_right", (1100, 100), (0, 100)),
+    ("bottom_right", (0, 550), (1100, 550)),     # eilės kryptis absoliuti (iš kairės)
+    ("top_right", (0, 100), (1100, 100)),
 ])
 def test_origin_corner(origin, first, second):
     s = dict(S, origin=origin)
-    pos, w, h, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50), (2, 100, 50)], 2, s, 254, 254)
+    pos, w, h, _, _ov = prn_job.layout_bed([(0, 100, 50), (1, 100, 50), (2, 100, 50)], 2, s, 254, 254)
     assert (w, h) == (1400, 700)
     assert pos[0] == first and pos[1] == second
 
 
+def test_rows_fill_from_right_like_studio():
+    # 7 dizainai, 5 stulpeliai: 1-a eilė [5][4][3][2][1], 2-a eilė dešinėje [7][6]
+    s = dict(S, row_direction="right_to_left", include_print_offset=False, container_x=10.0, container_y=10.0)
+    slots = [(i, 100, 50) for i in range(7)]
+    pos, w, h, _, ov = prn_job.layout_bed(slots, 5, s, 254, 254)
+    step = 100 + 100
+    assert ov == [] and w == 4 * step + 100
+    assert pos[0][0] == 4 * step and pos[4][0] == 0          # pirmas – dešinėje
+    assert pos[5][0] == 4 * step and pos[6][0] == 3 * step   # antra eilė prasideda dešinėje
+    assert pos[0][1] == h - 50 and pos[5][1] == 0
+
+
+def test_partial_first_row_like_studio():
+    s = dict(S, row_direction="right_to_left", include_print_offset=False, container_x=10.0)
+    pos, _, _, _, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 5, s, 254, 254)
+    assert pos[0][0] == 200 and pos[1][0] == 0
+
+
+def test_model_table_width_sets_columns_and_height_limits_rows():
+    # 1 mm = 10 px; dizainas 10 mm, tarpas 10 mm, print X 20 mm; stalas 85 mm → (85-20+10)//20 = 3 stulpeliai
+    s = dict(S, table_width=85.0, table_height=60.0, container_x=10.0, container_y=10.0)
+    slots = [(i, 100, 100) for i in range(8)]
+    pos, w, h, warns, ov = prn_job.layout_bed(slots, 5, s, 254, 254)
+    assert pos[3][0] == pos[0][0] == 200                  # 4-as dizainas – jau antroje eilėje
+    # aukštis: (60-10+10)//20 = 3 eilės → 9 vietos, telpa visi 8
+    assert ov == []
+    s["table_height"] = 40.0                              # (40-10+10)//20 = 2 eilės → 6 vietos
+    pos, _, _, warns, ov = prn_job.layout_bed(slots, 5, s, 254, 254)
+    assert ov == [6, 7] and any("Netilpo" in x for x in warns) and 6 not in pos
+
+
+def test_design_wider_than_model_table():
+    s = dict(S, table_width=15.0)
+    pos, w, h, warns, ov = prn_job.layout_bed([(0, 100, 50)], 2, s, 254, 254)
+    assert pos == {} and ov == [0] and warns
+
+
 def test_bad_origin_falls_back():
-    assert prn_job.model_prn_settings({"prn": {"origin": "centras", "units": "mm"}})["origin"] == "bottom_left"
+    s = prn_job.model_prn_settings({"prn": {"origin": "centras", "row_direction": "?", "units": "mm"}})
+    assert s["origin"] == "bottom_left" and s["row_direction"] == "right_to_left"
 
 
 def test_empty_slot_keeps_its_place():
-    pos, _, _, _ = prn_job.layout_bed([(1, 100, 50)], 2, S, 254, 254)
+    pos, _, _, _, _ov = prn_job.layout_bed([(1, 100, 50)], 2, S, 254, 254)
     assert pos[1][0] == 200 + 100 + 1000
 
 
 def test_overlap_and_table_warnings():
     s = dict(S, container_x=-5.0)
-    _, _, _, warns = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254, table_mm=(10, 10))
+    _, _, _, warns, _ov = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254, table_mm=(10, 10))
     assert any("persidengia" in w for w in warns)
     assert any("netelpa" in w for w in warns)
 
@@ -95,7 +134,8 @@ def test_generate_prn_for_bed(core, tmp_path):
     (src / "1003_macbook.png").write_bytes(b"png")
     plan = {
         "source_dir": str(src), "search_network": False, "out_dir": str(out), "cols": 2,
-        "prn": dict(prn_job.PRN_DEFAULTS, container_x=10.0, container_y=10.0, print_x=5.0, print_y=2.0),
+        "prn": dict(prn_job.PRN_DEFAULTS, container_x=10.0, container_y=10.0, print_x=5.0, print_y=2.0,
+                    row_direction="left_to_right"),
         "beds": [{"bed_idx": 0, "title": "BID-7", "items": ["PID-1001", None, "PID-1002", "PID-1003", "PID-9"]}],
     }
     plan["prn"]["output_dir"] = str(tmp_path / "modelio")   # modelio aplankas svarbesnis už bendrą

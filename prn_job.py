@@ -7,8 +7,9 @@ Koordinatės (kaip ColorGATE konteineryje), milimetrais:
   container_x / container_y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito krašto),
   print_x / print_y         – kiek visas išdėstymas atitrauktas nuo atskaitos kampo (origin),
   height                    – spausdinimo aukštis (tik informacija operatoriui).
-Atskaitos kampas (origin, numatyta kairė apačia) – nuo jo matuojamas Print X/Y ir jame
-stovi pirmas dizainas: vieta i → stulpelis i % cols ir eilė i // cols, skaičiuojant nuo to kampo.
+Atskaitos kampas (origin, numatyta kairė apačia) – nuo jo matuojamas Print X/Y; eilės skaičiuojamos
+nuo jo (i // cols), o eilėje dizainai dedami iš dešinės į kairę (kaip Container Studio) arba atvirkščiai.
+Modelio stalo dydis (table_width/height) nurodo plotą, į kurį dizainai turi sutilpti.
 
 Modulis be Qt – testuojamas be PySide6. numpy/tifffile importuojami tik generuojant.
 """
@@ -28,6 +29,14 @@ PRN_DEFAULTS = {
     "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
     "units": "mm",
     "origin": "bottom_left",
+    "row_direction": "right_to_left",   # kaip Container Studio; arba "left_to_right"
+    "table_width": 0.0,        # mm; 0 → stulpelių tiek, kiek rėme
+    "table_height": 0.0,       # mm; 0 → eilių neribojama
+}
+
+PRN_ROW_DIRECTIONS = {
+    "right_to_left": "Iš dešinės į kairę (kaip Studijoje)",
+    "left_to_right": "Iš kairės į dešinę",
 }
 
 PRN_ORIGINS = {
@@ -37,7 +46,7 @@ PRN_ORIGINS = {
     "top_right": "Dešinė viršus",
 }
 
-PRN_LENGTH_KEYS = ("container_x", "container_y", "print_x", "print_y", "height")
+PRN_LENGTH_KEYS = ("container_x", "container_y", "print_x", "print_y", "height", "table_width", "table_height")
 
 PRN_CONFIG_DEFAULTS = {
     "output_dir": "",          # tuščia → Darbalaukis\Konteineriai\PRN
@@ -70,6 +79,8 @@ def model_prn_settings(model):
     out["units"] = "mm"
     if out.get("origin") not in PRN_ORIGINS:
         out["origin"] = "bottom_left"
+    if out.get("row_direction") not in PRN_ROW_DIRECTIONS:
+        out["row_direction"] = "right_to_left"
     out["include_print_offset"] = bool(out["include_print_offset"])
     out["output_dir"] = str(out.get("output_dir") or "").strip()
     return out
@@ -134,34 +145,73 @@ def mm_to_px(mm, dpi):
 
 def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
     """
-    slots: [(vieta, plotis_px, aukštis_px)] – tik užpildyti lizdai, vieta = indeksas stale.
+    slots: [(vieta, plotis_px, aukštis_px)] – tik užpildyti lizdai, vieta = eilės numeris (0 = pirmas).
     Lizdo dydis – didžiausias stalo dizainas (to paties modelio dizainai vienodi), tarp lizdų –
     konteinerio X/Y tarpas, tad tuščia vieta užima tiek pat, kiek dizainas.
+    Stulpelių skaičius: kiek telpa į modelio stalo plotį (table_width), o jei jis 0 – pagal rėmą (cols).
+    Eilės pildomos iš dešinės į kairę (kaip Container Studio) arba iš kairės į dešinę (row_direction).
     Grąžina (pozicijos {vieta: (x, y)} – kairysis viršutinis kampas puslapio pikseliais,
-             puslapio plotis, aukštis, įspėjimai).
+             puslapio plotis, aukštis, įspėjimai, netilpusios vietos).
     """
-    cols = max(1, int(cols or 1))
+    if not slots:
+        return {}, 0, 0, [], []
+    warnings, overflow = [], []
     off_x = settings["print_x"] if settings["include_print_offset"] else 0.0
     off_y = settings["print_y"] if settings["include_print_offset"] else 0.0
-    if not slots:
-        return {}, 0, 0, []
     cell_w = max(w for _, w, _ in slots)
     cell_h = max(h for _, _, h in slots)
     gap_x, gap_y = mm_to_px(settings["container_x"], xdpi), mm_to_px(settings["container_y"], ydpi)
+    step_x, step_y = cell_w + gap_x, cell_h + gap_y
     x0, y0 = mm_to_px(off_x, xdpi), mm_to_px(off_y, ydpi)
-    # Atstumai nuo atskaitos kampo: dx – nuo jo šoninio krašto, dy – nuo jo viršaus/apačios
-    placed = []  # (vieta, dx, dy, w, h) pikseliais
-    for idx, w, h in slots:
-        col, row = idx % cols, idx // cols
-        placed.append((idx, x0 + col * (cell_w + gap_x), y0 + row * (cell_h + gap_y), w, h))
-    page_w = max(dx + w for _, dx, _, w, _ in placed)
-    page_h = max(dy + h for _, _, dy, _, h in placed)
+
+    table_w, table_h = settings.get("table_width") or 0, settings.get("table_height") or 0
+    if table_w > 0:
+        avail = mm_to_px(table_w - settings["print_x"], xdpi)
+        cols = max(0, (avail + gap_x) // step_x)
+    else:
+        cols = max(1, int(cols or 1))
+    rows_max = None
+    if table_h > 0:
+        avail = mm_to_px(table_h - settings["print_y"], ydpi)
+        rows_max = max(0, (avail + gap_y) // step_y)
+    if cols == 0 or rows_max == 0:
+        warnings.append(f"Dizainas ({cell_w / xdpi * 25.4:.0f} × {cell_h / ydpi * 25.4:.0f} mm) netelpa į modelio "
+                        f"stalą ({table_w or '–'} × {table_h or '–'} mm).")
+        return {}, 0, 0, warnings, [idx for idx, _, _ in slots]
+
+    rtl = settings.get("row_direction", "right_to_left") == "right_to_left"
+    n_total = max(idx for idx, _, _ in slots) + 1
+    block_w = cols * cell_w + (cols - 1) * gap_x
     origin = settings.get("origin", "bottom_left")
     right, top = origin.endswith("_right"), origin.startswith("top_")
+
+    # dx – atstumas nuo atskaitos kampo šoninio krašto, dy – nuo jo viršaus/apačios
+    placed = []  # (vieta, dx, dy, w, h) pikseliais
+    for idx, w, h in slots:
+        row, k = idx // cols, idx % cols
+        if rows_max is not None and row >= rows_max:
+            overflow.append(idx)
+            continue
+        if not rtl:
+            c = k
+        elif row == 0 and n_total < cols:
+            c = n_total - 1 - k          # nepilna pirma eilė – kaip Studijoje, prie kairiojo krašto
+        else:
+            c = cols - 1 - k
+        left = c * step_x                # nuo bloko kairiojo krašto
+        dx = x0 + (block_w - left - cell_w if right else left)
+        placed.append((idx, dx, y0 + row * step_y, w, h))
+    if overflow:
+        warnings.append(f"Netilpo į modelio stalą ({table_w or '–'} × {table_h or '–'} mm): "
+                        f"{len(overflow)} diz. – jie į failą neįtraukti.")
+    if not placed:
+        return {}, 0, 0, warnings, overflow
+
+    page_w = max(dx + w for _, dx, _, w, _ in placed)
+    page_h = max(dy + h for _, _, dy, _, h in placed)
     positions = {idx: (page_w - dx - w if right else dx, dy if top else page_h - dy - h)
                  for idx, dx, dy, w, h in placed}
 
-    warnings = []
     by_idx = sorted(placed)
     for a in range(len(by_idx)):
         for b in range(a + 1, len(by_idx)):
@@ -169,13 +219,13 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
             ib, xb, bb, wb, hb = by_idx[b]
             if xa < xb + wb and xb < xa + wa and ba < bb + hb and bb < ba + ha:
                 warnings.append(f"Dizainai {ia + 1} ir {ib + 1} persidengia – padidinkite konteinerio X/Y tarpą.")
-    if table_mm:
+    if table_mm and not (table_w > 0 and table_h > 0):
         tw, th = table_mm
         full_w = page_w / xdpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_x"])
         full_h = page_h / ydpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_y"])
         if full_w > tw + 0.5 or full_h > th + 0.5:
             warnings.append(f"Išdėstymas ({full_w:.0f} × {full_h:.0f} mm) netelpa ant stalo ({tw:.0f} × {th:.0f} mm).")
-    return positions, page_w, page_h, warnings
+    return positions, page_w, page_h, warnings, overflow
 
 
 # ----------------- GENERAVIMAS -----------------
@@ -270,10 +320,18 @@ def _run_prn_job(plan, progress=None):
             result["errors"].append(f"Stalas {bed_no}: nėra nei vieno TIF failo – .prn nesukurtas.")
             continue
 
-        positions, page_w, page_h, warns = layout_bed(slots, plan.get("cols", 1), settings,
-                                                      setup.xdpi, setup.ydpi, plan.get("table_mm"))
+        positions, page_w, page_h, warns, overflow = layout_bed(slots, plan.get("cols", 1), settings,
+                                                                setup.xdpi, setup.ydpi, plan.get("table_mm"))
         result["warnings"].extend(f"Stalas {bed_no}: {w}" for w in warns)
-        jobs = [Job(jobs_by_idx[i], *positions[i]) for i, _, _ in slots]
+        for i in overflow:
+            name = b["items"][i]
+            result["errors"].append(f"{core.missing_label(name)} (stalas {bed_no}, vieta {i + 1}): netilpo į modelio stalą")
+            result["missing"].append((b["bed_idx"], i, name))
+            result["found"] = [f for f in result["found"] if (f[0], f[1]) != (b["bed_idx"], i)]
+        if not positions:
+            result["errors"].append(f"Stalas {bed_no}: nė vienas dizainas netilpo – .prn nesukurtas.")
+            continue
+        jobs = [Job(jobs_by_idx[i], *positions[i]) for i, _, _ in slots if i in positions]
 
         title = core.safe_folder_name(b.get("title") or "", f"Stalas_{bed_no}")
         base = f"{title}_{stamp}"
