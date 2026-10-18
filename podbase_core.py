@@ -816,24 +816,12 @@ def run_container_job(plan, progress=None):
         _container_job_lock.release()
 
 
-def _run_container_job(plan, progress=None):
+def resolve_plan_files(plan, result, report=lambda *a, **k: None):
     """
-    Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
-
-    plan = {
-        "source_dir": str, "dest_dir": str, "hotfolder": bool, "file_types": ["tif", ...] (nebūtina),
-        "beds": [{"bed_idx": int, "title": str, "items": [dizaino pavadinimas, ...]}]
-    }
-    Grąžina {"copied", "missing": [(bed_idx, item_idx, name)], "errors", "folders", "search_roots"}.
+    Suranda kiekvieno plano lizdo spaudos failą (naudoja ir konteineris, ir .prn generavimas).
+    Lizdai su None arba BLANK_TOKEN praleidžiami. Užpildo result["search_roots"], ["warnings"],
+    ["ambiguous"], ["search_seconds"]. Grąžina (search_roots, {(bed_idx, item_idx): kelias arba None}).
     """
-    def report(text, done=0, total=0):
-        if progress:
-            progress(done, total, text)
-
-    # found: [(stalas, vieta, pavadinimas, kelias, mtime)], warnings: tekstai operatoriui
-    result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": [],
-              "found": [], "warnings": [], "ambiguous": [], "blanks": []}
-
     report("Tikrinami paieškos aplankai...")
     search_started = time.time()
     search_roots = build_search_roots(plan.get("source_dir", ""), plan.get("search_network", True))
@@ -842,7 +830,7 @@ def _run_container_job(plan, progress=None):
     def match_all(scanned):
         return {
             (b["bed_idx"], i): find_matching_candidates(name, scanned)
-            for b in plan["beds"] for i, name in enumerate(b["items"]) if name != BLANK_TOKEN
+            for b in plan["beds"] for i, name in enumerate(b["items"]) if name and name != BLANK_TOKEN
         }
 
     # Tik modeliui priskirti failų tipai (pvz. MacBook – tik TIF)
@@ -861,16 +849,10 @@ def _run_container_job(plan, progress=None):
     matches = {k: (c[0][2] if c else None) for k, c in candidates_by_slot.items()}
     result["search_seconds"] = time.time() - search_started
 
-    # Tuščių lizdų dydis: pirmas rastas to paties stalo failas (jei nėra – bet kurio stalo)
-    blank_ref = {}
-    any_found = next((p for p in matches.values() if p), None)
-    for b in plan["beds"]:
-        if BLANK_TOKEN in b["items"]:
-            same_bed = [matches.get((b["bed_idx"], i)) for i, n in enumerate(b["items"]) if n != BLANK_TOKEN]
-            blank_ref[b["bed_idx"]] = next((p for p in same_bed if p), None) or any_found
-
     for b in plan["beds"]:
         for i, name in enumerate(b["items"]):
+            if not name or name == BLANK_TOKEN:
+                continue
             cands = candidates_by_slot.get((b["bed_idx"], i)) or []
             others = ambiguous_alternatives(cands)
             if others:
@@ -881,6 +863,37 @@ def _run_container_job(plan, progress=None):
                     f"{missing_label(name)} (stalas {b['bed_idx'] + 1}, vieta {i + 1}): rasti {len(others) + 1} "
                     f"tinkami failai, paimtas naujausias – {chosen}. Kiti: {also}"
                 )
+
+    return search_roots, matches
+
+
+def _run_container_job(plan, progress=None):
+    """
+    Suranda ir nukopijuoja spaudos failus pagal planą. Vykdoma fono gijoje.
+
+    plan = {
+        "source_dir": str, "dest_dir": str, "hotfolder": bool, "file_types": ["tif", ...] (nebūtina),
+        "beds": [{"bed_idx": int, "title": str, "items": [dizaino pavadinimas, ...]}]
+    }
+    Grąžina {"copied", "missing": [(bed_idx, item_idx, name)], "errors", "folders", "search_roots"}.
+    """
+    def report(text, done=0, total=0):
+        if progress:
+            progress(done, total, text)
+
+    # found: [(stalas, vieta, pavadinimas, kelias, mtime)], warnings: tekstai operatoriui
+    result = {"copied": 0, "missing": [], "errors": [], "folders": [], "search_roots": [],
+              "found": [], "warnings": [], "ambiguous": [], "blanks": []}
+
+    search_roots, matches = resolve_plan_files(plan, result, report)
+
+    # Tuščių lizdų dydis: pirmas rastas to paties stalo failas (jei nėra – bet kurio stalo)
+    blank_ref = {}
+    any_found = next((p for p in matches.values() if p), None)
+    for b in plan["beds"]:
+        if BLANK_TOKEN in b["items"]:
+            same_bed = [matches.get((b["bed_idx"], i)) for i, n in enumerate(b["items"]) if n != BLANK_TOKEN]
+            blank_ref[b["bed_idx"]] = next((p for p in same_bed if p), None) or any_found
 
     is_hot = plan.get("hotfolder", False)
     dest_dir = plan.get("dest_dir", "")

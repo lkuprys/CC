@@ -33,7 +33,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRe
 from ui_kit import (
     SubtitleLabel, TitleLabel, BodyLabel, CaptionLabel, StrongBodyLabel, SecondaryLabel, FieldLabel, SectionLabel,
     PrimaryPushButton, PushButton, SuccessPushButton, DangerPushButton, GhostPushButton, ToolButton,
-    TransparentToolButton, ComboBox, LineEdit, SearchLineEdit, SpinBox, CardWidget, CheckBox,
+    TransparentToolButton, ComboBox, LineEdit, SearchLineEdit, SpinBox, DoubleSpinBox, CardWidget, CheckBox,
     InfoBar, InfoBarPosition, ProgressBar, FIF, setTheme, Theme, isDarkTheme, SmoothScrollArea,
     StatusBadge, TableWidget, SegmentedWidget, UnderlineTabs, ChipGroup, Notice, MessageBoxBase, confirm, divider,
     tokens, status_colors, tabular, theme_signals, apply_app_theme, icon as tinted_icon,
@@ -44,12 +44,13 @@ from updater import AppUpdater, CURRENT_VERSION, DEFAULT_GITHUB_REPO, PERIODIC_C
 
 from podbase_core import (
     BASE_DIR, DESKTOP_DIR, ICON_FILE, get_res_path, LOG_FILE, NETWORK_HOTFOLDER_DEFAULT, add_history_entry,
-    get_cleanup_expiry_seconds, prefetch_scanned_files, FILE_TYPE_GROUPS, plan_item_name, BLANK_LABEL,
+    get_cleanup_expiry_seconds, prefetch_scanned_files, FILE_TYPE_GROUPS, plan_item_name, BLANK_LABEL, BLANK_TOKEN,
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
 )
 from api_server import FlaskServerThread
+import prn_job
 
 
 # ----------------- MINIATIŪRŲ ATMINTIS -----------------
@@ -188,6 +189,25 @@ class ContainerJobWorker(QThread):
     def run(self):
         try:
             res = run_container_job(self.plan, lambda d, t, txt: self.progress.emit(d, t, txt))
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished_ok.emit(res)
+
+
+class PrnJobWorker(QThread):
+    """.prn failo generavimas fono gijoje (paieška + išdėstymas + rastras)."""
+    progress = Signal(int, int, str)
+    finished_ok = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, plan, parent=None):
+        super().__init__(parent)
+        self.plan = plan
+
+    def run(self):
+        try:
+            res = prn_job.run_prn_job(self.plan, lambda d, t, txt: self.progress.emit(d, t, txt))
         except Exception as e:
             self.failed.emit(str(e))
             return
@@ -592,6 +612,8 @@ class ContainerStudioInterface(QWidget):
         self.ambiguous_items_by_bed = {}  # {stalas: {vieta, ...}}
         self._job_worker = None
         self._job_context = None
+        self._prn_worker = None
+        self._prn_context = None
 
         self.setAcceptDrops(True)
         self.load_data()
@@ -737,6 +759,13 @@ class ContainerStudioInterface(QWidget):
 
         self.lbl_generate_hint = SecondaryLabel("", self)
         bot_layout.addWidget(self.lbl_generate_hint, 1, Qt.AlignRight | Qt.AlignVCenter)
+
+        self.btn_generate_prn = PushButton(FIF.PRINT, "Generuoti .prn", self)
+        self.btn_generate_prn.setFixedHeight(48)
+        self.btn_generate_prn.setToolTip("Sudeda stalo dizainus pagal modelio koordinates į vieną spausdinimo "
+                                         "failą (.prn) be ColorGATE. Koordinatės – Nustatymai → Modeliai.")
+        self.btn_generate_prn.clicked.connect(lambda: self.generate_prn_file())
+        bot_layout.addWidget(self.btn_generate_prn)
 
         self.btn_generate = PrimaryPushButton("Sukurti konteinerį", self)
         self.btn_generate.setFixedHeight(48)
@@ -1477,6 +1506,131 @@ class ContainerStudioInterface(QWidget):
             parent=self
         )
 
+
+    # ----------------- .prn GENERAVIMAS -----------------
+    def build_prn_plan(self):
+        """
+        Grąžina (planas, None) arba (None, klaidos tekstas).
+        Dizainai numeruojami kaip konteineryje (01, 02, ... be tarpų) – tokia tvarka ColorGATE juos deda
+        nuo kairės apačios; praleisti vietą galima „Tuščiu lizdu“.
+        """
+        self.save_current_bed_state()
+        m_data = self.get_selected_model_data()
+        if not m_data:
+            return None, "Pasirinkite modelį."
+        settings = prn_job.model_prn_settings(m_data)
+        if settings["container_x"] <= 0 and settings["container_y"] <= 0:
+            return None, (f"Modeliui „{m_data.get('name', '')}“ nenustatytos .prn koordinatės "
+                          "(Nustatymai → Modeliai → Spausdinimo failas).")
+        beds_plan = []
+        for idx, bed_items in enumerate(self.beds):
+            items = [plan_item_name(it) for it in bed_items if it and it.get("name")]
+            if not any(n and n != BLANK_TOKEN for n in items):
+                continue
+            title = self.bed_names[idx] if idx < len(self.bed_names) and self.bed_names[idx] else f"Stalas_{idx + 1}"
+            beds_plan.append({"bed_idx": idx, "title": safe_folder_name(title, f"Stalas_{idx + 1}"), "items": items})
+        if not beds_plan:
+            return None, "Stale nėra dizainų."
+        cfg = prn_job.prn_config()
+        jig = self.active_jig or {}
+        return {
+            "source_dir": m_data.get("source", "").strip(),
+            "file_types": m_data.get("file_types") or [],
+            "search_network": m_data.get("search_network", True),
+            "out_dir": cfg.get("output_dir") or prn_job.default_output_dir(),
+            "bundle_dir": cfg.get("bundle_dir") or "",
+            "cols": jig.get("cols", 1),
+            "prn": settings,
+            "table_mm": (float(cfg.get("table_width_mm") or 2500), float(cfg.get("table_height_mm") or 1300)),
+            "beds": beds_plan,
+            "model_name": m_data.get("name", ""),
+        }, None
+
+    def generate_prn_file(self, scheduled=False):
+        """Paleidžia .prn generavimą. scheduled=True – iš tvarkaraščio (be langų, tik pranešimai). Grąžina True, jei pradėta."""
+        if self._prn_worker is not None and self._prn_worker.isRunning():
+            if scheduled:
+                log.warning("Tvarkaraštis: .prn jau generuojamas – šis paleidimas praleistas")
+            return False
+        self._clear_job_marks()
+        plan, err = self.build_prn_plan()
+        if err:
+            if scheduled:
+                log.info(f"Tvarkaraštis: .prn negeneruotas – {err}")
+            InfoBar.warning(title=".prn negeneruotas", content=err, position=InfoBarPosition.TOP_RIGHT,
+                            duration=8000 if scheduled else 5000, parent=self)
+            return False
+        self._prn_context = {
+            "scheduled": scheduled,
+            "out_dir": plan["out_dir"],
+            "beds_snapshot": [[(it or {}).get("name") for it in bed] for bed in self.beds],
+        }
+        log.info(f".prn generavimas ({'pagal tvarkaraštį' if scheduled else 'rankiniu būdu'}): "
+                 f"{plan['model_name']}, {len(plan['beds'])} stal.")
+        self.btn_generate_prn.setEnabled(False)
+        self.btn_generate_prn.setText("Generuojama…")
+        worker = PrnJobWorker(plan, self)
+        worker.progress.connect(lambda d, t, txt: self.lbl_generate_hint.setText(txt))
+        worker.finished_ok.connect(self._on_prn_finished)
+        worker.failed.connect(self._on_prn_failed)
+        self._prn_worker = worker
+        worker.start()
+        return True
+
+    def _restore_prn_button(self):
+        self.btn_generate_prn.setEnabled(True)
+        self.btn_generate_prn.setText("Generuoti .prn")
+        self.lbl_generate_hint.setText("")
+
+    def _on_prn_failed(self, err_msg):
+        self._restore_prn_button()
+        InfoBar.error(title="Nepavyko sugeneruoti .prn", content=err_msg, orient=Qt.Horizontal,
+                      isClosable=True, position=InfoBarPosition.TOP_RIGHT, duration=-1, parent=self)
+
+    def _on_prn_finished(self, res):
+        self._restore_prn_button()
+        ctx = self._prn_context or {}
+        current_snapshot = [[(it or {}).get("name") for it in bed] for bed in self.beds]
+        if current_snapshot == ctx.get("beds_snapshot"):
+            self._clear_job_marks()
+            for bed_idx, item_idx, _name, path, mtime in res.get("found", []):
+                self.found_items_by_bed.setdefault(bed_idx, {})[item_idx] = (path, mtime)
+            for key in res.get("ambiguous", []):
+                self.ambiguous_items_by_bed.setdefault(key[0], set()).add(key[1])
+            for bed_idx, item_idx, _name in res.get("missing", []):
+                self.missing_items_by_bed.setdefault(bed_idx, set()).add(item_idx)
+            if self.missing_items_by_bed:
+                self.current_bed_index = min(self.missing_items_by_bed.keys())
+        self.render_current_bed()
+
+        files, missing, errors, warnings = res.get("files", []), res.get("missing", []), res.get("errors", []), res.get("warnings", [])
+        if warnings:
+            InfoBar.warning(title="Patikrinkite išdėstymą", content="\n".join(warnings[:5]), orient=Qt.Vertical,
+                            isClosable=True, position=InfoBarPosition.BOTTOM_RIGHT, duration=10000, parent=self)
+        if files and not ctx.get("scheduled"):
+            try:
+                os.startfile(ctx.get("out_dir", ""))
+            except Exception as e:
+                log.warning(f"startfile error: {e}")
+        if missing or errors or not files:
+            parts = []
+            if files:
+                parts.append(f"Sukurta: {', '.join(os.path.basename(f['path']) for f in files)}.")
+            if missing:
+                parts.append(f"Nerasta / netinka {len(missing)}: " + ", ".join(missing_label(n) for _, _, n in missing[:8])
+                             + ". Šių dizainų faile nėra – lizdai pažymėti raudonai.")
+            if errors:
+                parts.append("; ".join(errors[:3]))
+            InfoBar.error(title=".prn sukurtas ne visas" if files else ".prn nesukurtas", content="\n".join(parts),
+                          orient=Qt.Horizontal, isClosable=True, position=InfoBarPosition.TOP_RIGHT,
+                          duration=-1, parent=self)
+            return
+        summary = "; ".join(f"{os.path.basename(f['path'])} ({f['designs']} diz., {f['width_mm']:.0f}×{f['height_mm']:.0f} mm)"
+                            for f in files)
+        InfoBar.success(title=".prn sugeneruotas" + (" pagal tvarkaraštį" if ctx.get("scheduled") else ""),
+                        content=f"{summary}\n{ctx.get('out_dir', '')}", orient=Qt.Horizontal, isClosable=True,
+                        position=InfoBarPosition.TOP_RIGHT, duration=8000, parent=self)
+
 # ----------------- HISTORY INTERFACE -----------------
 class HistoryInterface(QWidget):
     load_order_to_studio = Signal(dict)
@@ -1926,9 +2080,14 @@ class ModelsSettingsInterface(QWidget):
         self.init_search_tab(self.search_tab)
         self.stack.addWidget(self.search_tab)
 
+        self.prn_tab = QWidget()
+        self.init_prn_tab(self.prn_tab)
+        self.stack.addWidget(self.prn_tab)
+
         self.segmented_nav.addItem("modelsTab", "Modeliai", lambda: self.stack.setCurrentIndex(0))
         self.segmented_nav.addItem("jigsTab", "Rėmai", lambda: self.stack.setCurrentIndex(1))
         self.segmented_nav.addItem("searchTab", "Paieškos aplankai", lambda: self.stack.setCurrentIndex(3))
+        self.segmented_nav.addItem("prnTab", "Automatinis .prn", lambda: self.stack.setCurrentIndex(4))
         self.segmented_nav.addItem("updatesTab", "Atnaujinimai", lambda: self.stack.setCurrentIndex(2))
         self.segmented_nav.setCurrentItem("modelsTab")
 
@@ -1939,7 +2098,7 @@ class ModelsSettingsInterface(QWidget):
         main_layout.addWidget(self.stack, 1)
 
     def show_tab(self, index):
-        keys = ["modelsTab", "jigsTab", "updatesTab", "searchTab"]
+        keys = ["modelsTab", "jigsTab", "updatesTab", "searchTab", "prnTab"]
         if 0 <= index < len(keys):
             self.segmented_nav.setCurrentItem(keys[index])
             self.stack.setCurrentIndex(index)
@@ -2083,6 +2242,42 @@ class ModelsSettingsInterface(QWidget):
                        4, 0, 1, 2)
 
         detail_layout.addLayout(form)
+
+        # Spausdinimo failas (.prn) – koordinatės kaip ColorGATE konteineryje
+        detail_layout.addWidget(divider(parent_widget))
+        prn_head = QVBoxLayout()
+        prn_head.setSpacing(4)
+        prn_head.addWidget(StrongBodyLabel("Spausdinimo failas (.prn)", parent_widget))
+        prn_hint = CaptionLabel(
+            "Naudojama mygtukui „Generuoti .prn“ ir tvarkaraščiui. Pirmas dizainas – kairėje apačioje. "
+            "Konteinerio X/Y – žingsnis tarp gretimų dizainų (nuo vieno pradžios iki kito pradžios), "
+            "Print X/Y – kur ant stalo prasideda pirmas dizainas. Visos reikšmės centimetrais.", parent_widget)
+        prn_hint.setWordWrap(True)
+        prn_head.addWidget(prn_hint)
+        detail_layout.addLayout(prn_head)
+
+        prn_form = QGridLayout()
+        prn_form.setHorizontalSpacing(16)
+        prn_form.setVerticalSpacing(16)
+        for c in range(3):
+            prn_form.setColumnStretch(c, 1)
+        self.prn_spins = {}
+        for key, label, row, col in (("container_x", "Konteineris X", 0, 0), ("container_y", "Konteineris Y", 0, 1),
+                                     ("height", "Aukštis", 0, 2),
+                                     ("print_x", "Print X", 1, 0), ("print_y", "Print Y", 1, 1)):
+            spin = DoubleSpinBox(parent_widget, decimals=2, suffix=" cm")
+            spin.setRange(0, 250)
+            spin.setSingleStep(0.1)
+            spin.valueChanged.connect(self.on_model_edited)
+            self.prn_spins[key] = spin
+            prn_form.addLayout(self._field(parent_widget, label, spin), row, col)
+        self.chk_m_prn_offset = CheckBox("Įrašyti Print X/Y į failą", parent_widget)
+        self.chk_m_prn_offset.setToolTip("Įjungta – faile kairėje ir apačioje paliekama tuščia vieta iki Print X/Y.\n"
+                                         "Išjungta – failas prasideda nuo pirmo dizaino, o pradžios taškas "
+                                         "nustatomas spausdintuve.")
+        self.chk_m_prn_offset.toggled.connect(self.on_model_edited)
+        prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 1, 2)
+        detail_layout.addLayout(prn_form)
         detail_layout.addStretch(1)
 
         # Forma ilga – mažame ekrane ją galima slinkti
@@ -2287,6 +2482,112 @@ class ModelsSettingsInterface(QWidget):
             "Pakeitę kelią, paspauskite „Išsaugoti“.", parent_widget))
         layout.addStretch(1)
 
+    def init_prn_tab(self, parent_widget):
+        outer = QVBoxLayout(parent_widget)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = SmoothScrollArea(parent_widget)
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        body.setObjectName("prnTabBody")
+        body.setStyleSheet("#prnTabBody { background: transparent; }")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+
+        cfg = prn_job.prn_config()
+
+        # Tvarkaraštis
+        sched = CardWidget(body)
+        s_lay = QVBoxLayout(sched)
+        s_lay.setContentsMargins(20, 20, 20, 20)
+        s_lay.setSpacing(16)
+        s_head = QVBoxLayout()
+        s_head.setSpacing(4)
+        s_head.addWidget(SubtitleLabel("Tvarkaraštis", sched))
+        s_hint = SecondaryLabel(
+            "Nurodytu laiku programa paima Container Studio stalus (pasirinktą modelį ir jo dizainus), suranda TIF "
+            "failus pagal PID ir sugeneruoja .prn failą – lygiai kaip mygtukas „Generuoti .prn“. "
+            "Programa tuo metu turi būti atidaryta.", sched)
+        s_hint.setWordWrap(True)
+        s_head.addWidget(s_hint)
+        s_lay.addLayout(s_head)
+
+        self.chk_prn_schedule = CheckBox("Generuoti automatiškai", sched)
+        self.chk_prn_schedule.setChecked(bool(cfg.get("schedule_enabled")))
+        s_lay.addWidget(self.chk_prn_schedule)
+
+        self.edit_prn_times = LineEdit(sched)
+        self.edit_prn_times.setPlaceholderText("pvz. 07:00, 12:30, 18:00")
+        self.edit_prn_times.setText(", ".join(cfg.get("schedule_times", [])))
+        self.edit_prn_times.setMaximumWidth(420)
+        s_lay.addLayout(self._field(sched, "Laikai", self.edit_prn_times,
+                                    "Atskirkite kableliais, formatas VV:MM. Jei tuo metu programa buvo užimta, "
+                                    "generuojama vėliau (iki 30 min.)."))
+        layout.addWidget(sched)
+
+        # Išvestis ir stalas
+        out = CardWidget(body)
+        o_lay = QVBoxLayout(out)
+        o_lay.setContentsMargins(20, 20, 20, 20)
+        o_lay.setSpacing(16)
+        o_lay.addWidget(SubtitleLabel("Failai ir stalas", out))
+
+        out_row = QHBoxLayout()
+        out_row.setSpacing(8)
+        self.edit_prn_out = LineEdit(out)
+        self.edit_prn_out.setText(cfg.get("output_dir", ""))
+        self.edit_prn_out.setPlaceholderText(prn_job.default_output_dir())
+        self.edit_prn_out.setClearButtonEnabled(True)
+        out_row.addWidget(self.edit_prn_out, 1)
+        btn_out = PushButton(FIF.FOLDER, "Naršyti…", out)
+        btn_out.clicked.connect(lambda: self._browse_into(self.edit_prn_out, "Pasirinkite .prn failų aplanką"))
+        out_row.addWidget(btn_out)
+        o_lay.addLayout(self._field(out, "Kur dėti .prn failus", out_row,
+                                    "Tuščia – Darbalaukis\\Konteineriai\\PRN. Šalia .prn sukuriama ir .bmp peržiūra."))
+
+        table_row = QHBoxLayout()
+        table_row.setSpacing(16)
+        self.spin_prn_table_w = SpinBox(out)
+        self.spin_prn_table_w.setRange(100, 10000)
+        self.spin_prn_table_w.setSuffix(" mm")
+        self.spin_prn_table_w.setValue(int(cfg.get("table_width_mm") or 2500))
+        self.spin_prn_table_h = SpinBox(out)
+        self.spin_prn_table_h.setRange(100, 10000)
+        self.spin_prn_table_h.setSuffix(" mm")
+        self.spin_prn_table_h.setValue(int(cfg.get("table_height_mm") or 1300))
+        table_row.addLayout(self._field(out, "Stalo plotis", self.spin_prn_table_w))
+        table_row.addLayout(self._field(out, "Stalo aukštis", self.spin_prn_table_h))
+        table_row.addStretch(1)
+        o_lay.addLayout(table_row)
+
+        bundle_row = QHBoxLayout()
+        bundle_row.setSpacing(8)
+        self.edit_prn_bundle = LineEdit(out)
+        self.edit_prn_bundle.setText(cfg.get("bundle_dir", ""))
+        self.edit_prn_bundle.setPlaceholderText("Įdiegtas su programa (GUNSJET 2513)")
+        self.edit_prn_bundle.setClearButtonEnabled(True)
+        bundle_row.addWidget(self.edit_prn_bundle, 1)
+        btn_bundle = PushButton(FIF.FOLDER, "Naršyti…", out)
+        btn_bundle.clicked.connect(lambda: self._browse_into(self.edit_prn_bundle, "Pasirinkite ColorGATE profilių (bundle) aplanką"))
+        bundle_row.addWidget(btn_bundle)
+        o_lay.addLayout(self._field(out, "Spalvų profiliai (bundle)", bundle_row,
+                                    "Keisti nereikia. Nurodykite tik jei ColorGATE nustatymai pasikeitė ir "
+                                    "bundle aplankas sukurtas iš naujo (žr. colorgate_prn/README.md)."))
+        layout.addWidget(out)
+
+        layout.addWidget(Notice(
+            "info", "Koordinatės nustatomos kiekvienam modeliui",
+            "Nustatymai → Modeliai → „Spausdinimo failas (.prn)“: konteinerio X/Y, print X/Y ir aukštis. "
+            "Senas būdas (HotFolderis / laikinas aplankas) veikia kaip anksčiau.", body))
+        layout.addStretch(1)
+
+    def _browse_into(self, line_edit, title):
+        folder = QFileDialog.getExistingDirectory(self, title, line_edit.text().strip() or DESKTOP_DIR)
+        if folder:
+            line_edit.setText(os.path.normpath(folder))
+
     def browse_reject_folder(self):
         curr = self.edit_reject_folder.text().strip() or NETWORK_HOTFOLDER_DEFAULT
         folder = QFileDialog.getExistingDirectory(self, "Pasirinkite brokų (rejected) aplanką", curr)
@@ -2378,6 +2679,14 @@ class ModelsSettingsInterface(QWidget):
             self.chk_m_network.blockSignals(True)
             self.chk_m_network.setChecked(m.get("search_network", True))
             self.chk_m_network.blockSignals(False)
+            prn = prn_job.model_prn_settings(m)
+            for key, spin in self.prn_spins.items():
+                spin.blockSignals(True)
+                spin.setValue(prn[key])
+                spin.blockSignals(False)
+            self.chk_m_prn_offset.blockSignals(True)
+            self.chk_m_prn_offset.setChecked(prn["include_print_offset"])
+            self.chk_m_prn_offset.blockSignals(False)
 
             out_mode = m.get("output_mode", "temp_folder")
             idx_mode = self.combo_m_output_mode.findData(out_mode)
@@ -2425,6 +2734,9 @@ class ModelsSettingsInterface(QWidget):
             # Visi arba nė vienas pažymėtas = ieškoma visų tipų
             m["file_types"] = [] if len(types) in (0, len(FILE_TYPE_GROUPS)) else types
             m["search_network"] = self.chk_m_network.isChecked()
+            prn = {key: round(spin.value(), 2) for key, spin in self.prn_spins.items()}
+            prn["include_print_offset"] = self.chk_m_prn_offset.isChecked()
+            m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")
 
     def on_jig_selected(self, row, col):
@@ -2548,7 +2860,18 @@ class ModelsSettingsInterface(QWidget):
             cfg["github_repo"] = self.edit_github_repo.text().strip() or DEFAULT_GITHUB_REPO
             cfg["auto_check_updates"] = self.chk_auto_updates.isChecked()
             cfg["reject_folder"] = self.edit_reject_folder.text().strip()
+            prn_cfg = dict(prn_job.PRN_CONFIG_DEFAULTS, **(cfg.get("prn") or {}))
+            prn_cfg.update({
+                "output_dir": self.edit_prn_out.text().strip(),
+                "bundle_dir": self.edit_prn_bundle.text().strip(),
+                "table_width_mm": self.spin_prn_table_w.value(),
+                "table_height_mm": self.spin_prn_table_h.value(),
+                "schedule_enabled": self.chk_prn_schedule.isChecked(),
+                "schedule_times": prn_job.normalize_times(re.split(r"[,;\s]+", self.edit_prn_times.text())),
+            })
+            cfg["prn"] = prn_cfg
             save_app_config(cfg)
+            self.edit_prn_times.setText(", ".join(prn_cfg["schedule_times"]))
 
             saved_model_idx = self.current_model_idx
             saved_jig_idx = self.current_jig_idx
@@ -2681,6 +3004,12 @@ class MainWindow(QWidget):
         self.cleanup_timer.start()
         self.run_auto_cleanup()
 
+        # .prn generavimas pagal tvarkaraštį (tikrinama kas 30 s)
+        self.prn_schedule_timer = QTimer(self)
+        self.prn_schedule_timer.setInterval(30000)
+        self.prn_schedule_timer.timeout.connect(self.run_prn_schedule)
+        self.prn_schedule_timer.start()
+
         # Parodome, kaip baigėsi paskutinis atnaujinimas (jei programa ką tik persikrovė po jo)
         QTimer.singleShot(1500, self.updater.show_last_update_result)
 
@@ -2696,6 +3025,26 @@ class MainWindow(QWidget):
         if cfg.get("auto_check_updates", True):
             repo_slug = cfg.get("github_repo", DEFAULT_GITHUB_REPO)
             self.updater.check_for_updates(repo_slug=repo_slug, manual=False)
+
+    def run_prn_schedule(self):
+        try:
+            cfg = load_app_config()
+            prn_cfg = cfg.get("prn") or {}
+            if not prn_cfg.get("schedule_enabled"):
+                return
+            last_runs = cfg.get("prn_last_runs") or {}
+            now = datetime.now()
+            due = prn_job.due_schedule_time(prn_cfg.get("schedule_times"), now, last_runs)
+            if not due:
+                return
+            # Pažymime prieš paleidžiant – kad klaidos atveju nebūtų kartojama kas 30 s
+            last_runs[due] = now.strftime("%Y-%m-%d")
+            cfg["prn_last_runs"] = last_runs
+            save_app_config(cfg)
+            log.info(f"Tvarkaraštis: {due} – generuojamas .prn")
+            self.studio_interface.generate_prn_file(scheduled=True)
+        except Exception as e:
+            log.warning(f"[run_prn_schedule error]: {e}")
 
     def run_auto_cleanup(self):
         try:
@@ -2791,12 +3140,13 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         running = [w for w in (getattr(self.studio_interface, "_job_worker", None),
+                               getattr(self.studio_interface, "_prn_worker", None),
                                getattr(self.history_interface, "_job_worker", None))
                    if w is not None and w.isRunning()]
         if running:
             InfoBar.warning(
                 title="Vyksta generavimas",
-                content="Palaukite, kol bus nukopijuoti failai, ir uždarykite programą iš naujo.",
+                content="Palaukite, kol bus baigtas generavimas, ir uždarykite programą iš naujo.",
                 position=InfoBarPosition.TOP_RIGHT,
                 duration=4000,
                 parent=self

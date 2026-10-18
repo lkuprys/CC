@@ -15,7 +15,7 @@ import sys
 import time
 
 from .cgsetup import ColorGateSetup
-from .generator import Job, generate_prn, load_layout, side_by_side
+from .generator import generate_prn, load_layout, side_by_side
 from .screening import Screen
 
 

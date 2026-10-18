@@ -27,6 +27,10 @@
 - **⏳ Saugus 10 Minučių Laikinas Aplankas (Auto-Cleanup):**
   - Sukuria paruoštus spaudos konteinerius darbalaukyje su automatiniu pasenusių aplankų išvalymu.
   - Galimybė nustatyti tiesioginį siuntimą į *ColorGATE HotFolder*.
+- **🖨️ Spausdinimo failas (.prn) be ColorGATE:**
+  - Mygtukas *Generuoti .prn* sudeda stalo TIF failus pagal modelio koordinates (konteinerio X/Y žingsnis, print X/Y pradžia, pirmas dizainas kairėje apačioje) į vieną GUNSJET 2513 `.prn` failą (+ `.bmp` peržiūra).
+  - Generavimas pagal tvarkaraštį: *Nustatymai → Automatinis .prn*. Koordinatės – *Nustatymai → Modeliai → Spausdinimo failas (.prn)*.
+  - Rastravimo variklis – `colorgate_prn/` (žr. jo `README.md`). Senas būdas (HotFolderis / laikinas aplankas) veikia kaip anksčiau.
 - **📜 Užsakymų Istorija ir Greitas Atkūrimas:**
   - Išsaugo visų atliktų generavimų istoriją su galimybe bet kada atkurti ar pergeneruoti užsakymą.
 - **🚀 Automatinis Atnaujinimų Tikrinimas (Auto-Updater):**
@@ -95,7 +99,7 @@ python -m pytest -q
 
 GitHub'e testai paleidžiami po kiekvieno pakeitimo (*Actions → Testai*) ir prieš kiekvieną išleidimą – jei testai nepraeina, nauja versija neišleidžiama.
 
-Kodo struktūra: `podbase_core.py` – logika be sąsajos, `api_server.py` – naršyklės plėtinio API, `app_gui.py` – sąsaja, `ui_kit.py` – išvaizda (Podbase WORK spalvos, šriftai, mygtukai, laukai, pranešimai), `updater.py` – atnaujinimai.
+Kodo struktūra: `podbase_core.py` – logika be sąsajos, `prn_job.py` – .prn išdėstymas ir generavimas, `colorgate_prn/` – TIF → .prn rastravimas, `api_server.py` – naršyklės plėtinio API, `app_gui.py` – sąsaja, `ui_kit.py` – išvaizda (Podbase WORK spalvos, šriftai, mygtukai, laukai, pranešimai), `updater.py` – atnaujinimai.
 
 Išvaizdos pavyzdžiai prieš ir po: `docs/dizainas/`. Šriftas Inter (OFL licencija, `fonts/`) įtraukiamas į programos paketą.
 
@@ -112,13 +116,22 @@ Programa rašo žurnalą `podbase.log` šalia `.exe` (*Nustatymai → Atnaujinim
   "github_repo": "lkuprys/CC",
   "auto_check_updates": true,
   "reject_folder": "",
-  "api_host": "127.0.0.1"
+  "api_host": "127.0.0.1",
+  "prn": {
+    "output_dir": "",
+    "bundle_dir": "",
+    "table_width_mm": 2500,
+    "table_height_mm": 1300,
+    "schedule_enabled": false,
+    "schedule_times": ["07:00", "13:30"]
+  }
 }
 ```
 
 - `auto_cleanup_minutes` – po kiek minučių ištrinami programos sukurti laikini aplankai. Trinami **tik** programos sukurti aplankai (jie įsimenami faile `temp_folders.json`), jūsų pačių aplankai neliečiami.
 - `api_host` – kur klauso naršyklės plėtinio serveris (5000 prievadas). Numatyta `127.0.0.1` – pasiekiamas tik iš to paties kompiuterio. Jei plėtinys siunčia iš **kito** kompiuterio, įrašykite `"0.0.0.0"` ir plėtinio nustatymuose nurodykite šio kompiuterio IP.
 - `reject_folder` – papildomas brokų aplankas paieškai.
+- `prn` – `.prn` generavimas: `output_dir` (tuščia → `Darbalaukis\Konteineriai\PRN`), `bundle_dir` (tuščia → su programa įdiegti GUNSJET profiliai), stalo dydis ir tvarkaraštis. Modelio koordinatės saugomos `models.json` → `"prn": {"container_x", "container_y", "print_x", "print_y", "height", "include_print_offset"}` (centimetrais).
 
 ---
 

@@ -57,7 +57,7 @@ jobs:
 
       - name: Patikrinti sintaksę
         shell: pwsh
-        run: python -m py_compile app_gui.py podbase_core.py api_server.py ui_kit.py updater.py package_release.py
+        run: python -m py_compile app_gui.py podbase_core.py prn_job.py api_server.py ui_kit.py updater.py package_release.py
 
       - name: Testai
         shell: pwsh
@@ -72,6 +72,9 @@ jobs:
           --icon="podbase_icon.ico" --add-data "models.json;." --add-data "jigs.json;."
           --add-data "config.json;." --add-data "podbase_logo.png;." --add-data "podbase_icon.png;."
           --add-data "fonts;fonts"
+          --add-data "colorgate_prn/data;colorgate_prn/data"
+          --add-data "colorgate_prn/bundle_gunsjet;colorgate_prn/bundle_gunsjet"
+          --collect-submodules imagecodecs
           app_gui.py
 
       - name: Sudaryti ZIP

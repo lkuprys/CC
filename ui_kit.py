@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer, QRectF, QSize, QPoint, Q
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPalette, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QFrame, QLabel, QPushButton, QToolButton, QLineEdit, QComboBox,
-    QSpinBox, QCheckBox, QProgressBar, QScrollArea, QTableWidget, QAbstractItemView,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QProgressBar, QScrollArea, QTableWidget, QAbstractItemView,
     QHBoxLayout, QVBoxLayout, QDialog, QSizePolicy, QButtonGroup
 )
 
@@ -287,15 +287,15 @@ def build_qss():
     QPushButton[chip="true"]:checked {{ background: {t['fill']}; border: 1px solid {t['text']}; color: {t['text']}; font-weight: 600; }}
 
     /* Laukai */
-    QLineEdit, QComboBox, QSpinBox, QTextBrowser[field="true"] {{
+    QLineEdit, QComboBox, QAbstractSpinBox, QTextBrowser[field="true"] {{
         background: {t['card']}; color: {t['text']}; border: 1px solid {t['border']};
         border-radius: {RADIUS_CONTROL}px; padding: 0 12px; font-size: 14px;
         selection-background-color: {t['strong']}; selection-color: {t['text']};
     }}
     QTextBrowser[field="true"] {{ padding: 8px 12px; background: {t['page']}; }}
-    QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{ border-color: {t['strong']}; }}
-    QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {t['focus']}; }}
-    QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: {t['disabled']}; background: {t['page']}; }}
+    QLineEdit:hover, QComboBox:hover, QAbstractSpinBox:hover {{ border-color: {t['strong']}; }}
+    QLineEdit:focus, QComboBox:focus, QAbstractSpinBox:focus {{ border-color: {t['focus']}; }}
+    QLineEdit:disabled, QComboBox:disabled, QAbstractSpinBox:disabled {{ color: {t['disabled']}; background: {t['page']}; }}
     QComboBox {{ padding-right: 32px; }}
     QComboBox::drop-down {{ border: none; width: 32px; subcontrol-origin: padding; subcontrol-position: center right; }}
     QComboBox::down-arrow {{ image: url("{down}"); width: 16px; height: 16px; }}
@@ -304,14 +304,14 @@ def build_qss():
         padding: 4px; outline: none; selection-background-color: {t['fill']}; selection-color: {t['text']};
     }}
     QComboBox QAbstractItemView::item {{ min-height: 32px; padding: 0 8px; border-radius: {RADIUS_CONTROL}px; }}
-    QSpinBox {{ padding-right: 28px; }}
-    QSpinBox::up-button, QSpinBox::down-button {{
+    QAbstractSpinBox {{ padding-right: 28px; }}
+    QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
         subcontrol-origin: border; width: 28px; border: none; background: transparent;
     }}
-    QSpinBox::up-button {{ subcontrol-position: top right; }}
-    QSpinBox::down-button {{ subcontrol-position: bottom right; }}
-    QSpinBox::up-arrow {{ image: url("{up}"); width: 14px; height: 14px; }}
-    QSpinBox::down-arrow {{ image: url("{down}"); width: 14px; height: 14px; }}
+    QAbstractSpinBox::up-button {{ subcontrol-position: top right; }}
+    QAbstractSpinBox::down-button {{ subcontrol-position: bottom right; }}
+    QAbstractSpinBox::up-arrow {{ image: url("{up}"); width: 14px; height: 14px; }}
+    QAbstractSpinBox::down-arrow {{ image: url("{down}"); width: 14px; height: 14px; }}
 
     /* Lentelės */
     QTableWidget {{
@@ -560,6 +560,18 @@ class SpinBox(QSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(40)
+        self.lineEdit().setTextMargins(10, 0, 0, 0)  # QSS padding kairėje vidiniam laukui netaikomas
+        tabular(self)
+
+
+class DoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent=None, decimals=2, suffix=""):
+        super().__init__(parent)
+        self.setFixedHeight(40)
+        self.lineEdit().setTextMargins(10, 0, 0, 0)
+        self.setDecimals(decimals)
+        if suffix:
+            self.setSuffix(suffix)
         tabular(self)
 
 
