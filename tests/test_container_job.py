@@ -182,7 +182,9 @@ def test_per_root_cache_survives_other_root_change(core, tmp_path, make_file, mo
     real = core.scan_print_files_recursive
     monkeypatch.setattr(core, "scan_print_files_recursive", lambda r: calls.append(r) or real(r))
     make_file(net / "3003_c.tif")          # pasikeitė tik tinklo aplankas
-    os.utime(net, None)
+    # Aiškiai pakeičiame aplanko laiką: Windows laikrodis tiksi ~15 ms, „dabar“ gali sutapti su senu
+    later = os.path.getmtime(net) + 10
+    os.utime(net, (later, later))
     files, _ = core.get_scanned_files(roots)
     assert calls == [[str(net)]]
     assert sorted(f["filename"] for f in files) == ["1001_a.tif", "2002_b.tif", "3003_c.tif"]
