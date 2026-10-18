@@ -32,6 +32,23 @@ def test_without_print_offset_first_design_at_page_corner():
     assert pos[0] == (0, 0) and w == 100 + 1000 + 100 and h == 50
 
 
+@pytest.mark.parametrize("origin, first, second", [
+    ("bottom_left", (200, 550), (1300, 550)),     # puslapis 1400 x 700
+    ("top_left", (200, 100), (1300, 100)),
+    ("bottom_right", (1100, 550), (0, 550)),
+    ("top_right", (1100, 100), (0, 100)),
+])
+def test_origin_corner(origin, first, second):
+    s = dict(S, origin=origin)
+    pos, w, h, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50), (2, 100, 50)], 2, s, 254, 254)
+    assert (w, h) == (1400, 700)
+    assert pos[0] == first and pos[1] == second
+
+
+def test_bad_origin_falls_back():
+    assert prn_job.model_prn_settings({"prn": {"origin": "centras", "units": "mm"}})["origin"] == "bottom_left"
+
+
 def test_empty_slot_keeps_its_place():
     pos, _, _, _ = prn_job.layout_bed([(1, 100, 50)], 2, S, 254, 254)
     assert pos[1][0] == 200 + 100 + 1000

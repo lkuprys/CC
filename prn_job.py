@@ -5,10 +5,10 @@ ir sudedami į vieną spausdintuvo failą (colorgate_prn paketas).
 
 Koordinatės (kaip ColorGATE konteineryje), milimetrais:
   container_x / container_y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito krašto),
-  print_x / print_y         – kiek visas išdėstymas atitrauktas nuo stalo kairiojo apatinio kampo,
+  print_x / print_y         – kiek visas išdėstymas atitrauktas nuo atskaitos kampo (origin),
   height                    – spausdinimo aukštis (tik informacija operatoriui).
-Pirmas dizainas visada kairėje apačioje: vieta i → stulpelis i % cols (iš kairės),
-eilė i // cols (iš apačios).
+Atskaitos kampas (origin, numatyta kairė apačia) – nuo jo matuojamas Print X/Y ir jame
+stovi pirmas dizainas: vieta i → stulpelis i % cols ir eilė i // cols, skaičiuojant nuo to kampo.
 
 Modulis be Qt – testuojamas be PySide6. numpy/tifffile importuojami tik generuojant.
 """
@@ -27,6 +27,14 @@ PRN_DEFAULTS = {
     "include_print_offset": True,
     "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
     "units": "mm",
+    "origin": "bottom_left",
+}
+
+PRN_ORIGINS = {
+    "bottom_left": "Kairė apačia",
+    "top_left": "Kairė viršus",
+    "bottom_right": "Dešinė apačia",
+    "top_right": "Dešinė viršus",
 }
 
 PRN_LENGTH_KEYS = ("container_x", "container_y", "print_x", "print_y", "height")
@@ -60,6 +68,8 @@ def model_prn_settings(model):
         except (TypeError, ValueError):
             out[k] = 0.0
     out["units"] = "mm"
+    if out.get("origin") not in PRN_ORIGINS:
+        out["origin"] = "bottom_left"
     out["include_print_offset"] = bool(out["include_print_offset"])
     out["output_dir"] = str(out.get("output_dir") or "").strip()
     return out
@@ -139,13 +149,17 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
     cell_h = max(h for _, _, h in slots)
     gap_x, gap_y = mm_to_px(settings["container_x"], xdpi), mm_to_px(settings["container_y"], ydpi)
     x0, y0 = mm_to_px(off_x, xdpi), mm_to_px(off_y, ydpi)
-    placed = []  # (vieta, x kairė, apačia nuo stalo apačios, w, h) pikseliais
+    # Atstumai nuo atskaitos kampo: dx – nuo jo šoninio krašto, dy – nuo jo viršaus/apačios
+    placed = []  # (vieta, dx, dy, w, h) pikseliais
     for idx, w, h in slots:
         col, row = idx % cols, idx // cols
         placed.append((idx, x0 + col * (cell_w + gap_x), y0 + row * (cell_h + gap_y), w, h))
-    page_w = max(x + w for _, x, _, w, _ in placed)
-    page_h = max(b + h for _, _, b, _, h in placed)
-    positions = {idx: (x, page_h - (b + h)) for idx, x, b, w, h in placed}
+    page_w = max(dx + w for _, dx, _, w, _ in placed)
+    page_h = max(dy + h for _, _, dy, _, h in placed)
+    origin = settings.get("origin", "bottom_left")
+    right, top = origin.endswith("_right"), origin.startswith("top_")
+    positions = {idx: (page_w - dx - w if right else dx, dy if top else page_h - dy - h)
+                 for idx, dx, dy, w, h in placed}
 
     warnings = []
     by_idx = sorted(placed)
