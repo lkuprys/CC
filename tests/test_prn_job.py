@@ -15,30 +15,30 @@ def px(cm, dpi):
 
 
 def test_first_design_bottom_left_and_rows_go_up():
-    # 2 x 2 rėmas, 100 x 50 px dizainai, dpi 254 → 1 cm = 100 px
+    # 2 x 2 rėmas, 100 x 50 px dizainai, dpi 254 → 1 cm = 100 px; konteineris = tarpas tarp dizainų
     slots = [(0, 100, 50), (1, 100, 50), (2, 100, 50)]
     pos, w, h, warns = prn_job.layout_bed(slots, 2, S, 254, 254)
-    assert w == px(2 + 10, 254) + 100
-    assert h == px(1 + 5, 254) + 50
-    assert pos[0] == (200, h - (100 + 50))            # apatinė eilė, kairėje
-    assert pos[1] == (200 + 1000, h - (100 + 50))     # apatinė eilė, dešinėje
-    assert pos[2] == (200, h - (100 + 500 + 50))      # viršutinė eilė
+    assert w == 200 + 100 + 1000 + 100                  # print X + dizainas + tarpas X + dizainas
+    assert h == 100 + 50 + 500 + 50                     # print Y + dizainas + tarpas Y + dizainas
+    assert pos[0] == (200, h - (100 + 50))              # apatinė eilė, kairėje
+    assert pos[1] == (200 + 100 + 1000, h - (100 + 50))  # apatinė eilė, dešinėje
+    assert pos[2] == (200, h - (100 + 50 + 500 + 50))   # viršutinė eilė
     assert warns == []
 
 
 def test_without_print_offset_first_design_at_page_corner():
     s = dict(S, include_print_offset=False)
     pos, w, h, _ = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254)
-    assert pos[0] == (0, 0) and w == 1000 + 100 and h == 50
+    assert pos[0] == (0, 0) and w == 100 + 1000 + 100 and h == 50
 
 
 def test_empty_slot_keeps_its_place():
     pos, _, _, _ = prn_job.layout_bed([(1, 100, 50)], 2, S, 254, 254)
-    assert pos[1][0] == 200 + 1000
+    assert pos[1][0] == 200 + 100 + 1000
 
 
 def test_overlap_and_table_warnings():
-    s = dict(S, container_x=0.5)
+    s = dict(S, container_x=-0.5)
     _, _, _, warns = prn_job.layout_bed([(0, 100, 50), (1, 100, 50)], 2, s, 254, 254, table_mm=(10, 10))
     assert any("persidengia" in w for w in warns)
     assert any("netelpa" in w for w in warns)
@@ -47,6 +47,7 @@ def test_overlap_and_table_warnings():
 def test_model_settings_defaults_and_bad_values():
     s = prn_job.model_prn_settings({"prn": {"container_x": "24.25", "print_y": "x", "nežinomas": 1}})
     assert s["container_x"] == 24.25 and s["print_y"] == 0.0 and "nežinomas" not in s
+    assert prn_job.model_prn_settings({"prn": {"output_dir": " D:/PRN "}})["output_dir"] == "D:/PRN"
     assert prn_job.model_prn_settings(None) == prn_job.PRN_DEFAULTS
 
 
@@ -77,14 +78,16 @@ def test_generate_prn_for_bed(core, tmp_path):
         "prn": dict(prn_job.PRN_DEFAULTS, container_x=1.0, container_y=1.0, print_x=0.5, print_y=0.2),
         "beds": [{"bed_idx": 0, "title": "BID-7", "items": ["PID-1001", None, "PID-1002", "PID-1003", "PID-9"]}],
     }
+    plan["prn"]["output_dir"] = str(tmp_path / "modelio")   # modelio aplankas svarbesnis už bendrą
     res = prn_job.run_prn_job(plan)
+    out = tmp_path / "modelio"
     assert len(res["files"]) == 1 and res["placed"] == 2
     f = res["files"][0]
     assert os.path.basename(f["path"]).startswith("BID-7_") and os.path.exists(f["bmp"])
     assert not [n for n in os.listdir(out) if n.endswith(".part")]
     hdr, _ = read_prn(f["path"], unpack=False)
-    # 40 px @300 → 96 px @720; vieta 2 = 0 stulpelis, 1 eilė; poslinkis 0.5 cm
+    # 40x30 px @300 → 96x120 px; vieta 2 = 0 stulpelis, 1 eilė; poslinkis 0.5/0.2 cm, tarpas 1 cm
     assert hdr.width == px(0.5, 720) + 96
-    assert hdr.height == px(0.2 + 1.0, 1200) + 120
+    assert hdr.height == px(0.2, 1200) + 120 + px(1.0, 1200) + 120
     assert sorted(m[2] for m in res["missing"]) == ["PID-1003", "PID-9"]
     assert any("TIF" in e for e in res["errors"])

@@ -28,7 +28,7 @@
   - Sukuria paruoštus spaudos konteinerius darbalaukyje su automatiniu pasenusių aplankų išvalymu.
   - Galimybė nustatyti tiesioginį siuntimą į *ColorGATE HotFolder*.
 - **🖨️ Spausdinimo failas (.prn) be ColorGATE:**
-  - Mygtukas *Generuoti .prn* sudeda stalo TIF failus pagal modelio koordinates (konteinerio X/Y žingsnis, print X/Y pradžia, pirmas dizainas kairėje apačioje) į vieną GUNSJET 2513 `.prn` failą (+ `.bmp` peržiūra).
+  - Mygtukas *Generuoti .prn* sudeda stalo TIF failus pagal modelio koordinates (konteinerio X/Y – tarpai tarp dizainų, print X/Y – atitraukimas nuo stalo kairiojo apatinio kampo, pirmas dizainas kairėje apačioje) į vieną GUNSJET 2513 `.prn` failą (+ `.bmp` peržiūra).
   - Generavimas pagal tvarkaraštį: *Nustatymai → Automatinis .prn*. Koordinatės – *Nustatymai → Modeliai → Spausdinimo failas (.prn)*.
   - Rastravimo variklis – `colorgate_prn/` (žr. jo `README.md`). Senas būdas (HotFolderis / laikinas aplankas) veikia kaip anksčiau.
 - **📜 Užsakymų Istorija ir Greitas Atkūrimas:**
@@ -131,7 +131,7 @@ Programa rašo žurnalą `podbase.log` šalia `.exe` (*Nustatymai → Atnaujinim
 - `auto_cleanup_minutes` – po kiek minučių ištrinami programos sukurti laikini aplankai. Trinami **tik** programos sukurti aplankai (jie įsimenami faile `temp_folders.json`), jūsų pačių aplankai neliečiami.
 - `api_host` – kur klauso naršyklės plėtinio serveris (5000 prievadas). Numatyta `127.0.0.1` – pasiekiamas tik iš to paties kompiuterio. Jei plėtinys siunčia iš **kito** kompiuterio, įrašykite `"0.0.0.0"` ir plėtinio nustatymuose nurodykite šio kompiuterio IP.
 - `reject_folder` – papildomas brokų aplankas paieškai.
-- `prn` – `.prn` generavimas: `output_dir` (tuščia → `Darbalaukis\Konteineriai\PRN`), `bundle_dir` (tuščia → su programa įdiegti GUNSJET profiliai), stalo dydis ir tvarkaraštis. Modelio koordinatės saugomos `models.json` → `"prn": {"container_x", "container_y", "print_x", "print_y", "height", "include_print_offset"}` (centimetrais).
+- `prn` – `.prn` generavimas: `output_dir` (tuščia → `Darbalaukis\Konteineriai\PRN`), `bundle_dir` (tuščia → su programa įdiegti GUNSJET profiliai), stalo dydis ir tvarkaraštis. Modelio koordinatės saugomos `models.json` → `"prn": {"container_x", "container_y", "print_x", "print_y", "height", "include_print_offset", "output_dir"}` (centimetrais; `output_dir` – modelio .prn aplankas, tuščia → bendras).
 
 ---
 

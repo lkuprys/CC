@@ -4,8 +4,8 @@
 ir sudedami į vieną spausdintuvo failą (colorgate_prn paketas).
 
 Koordinatės (kaip ColorGATE konteineryje), centimetrais:
-  container_x / container_y – žingsnis tarp gretimų lizdų (atstumas tarp dizainų pradžių),
-  print_x / print_y         – kur ant stalo prasideda pirmas dizainas,
+  container_x / container_y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito krašto),
+  print_x / print_y         – kiek visas išdėstymas atitrauktas nuo stalo kairiojo apatinio kampo,
   height                    – spausdinimo aukštis (tik informacija operatoriui).
 Pirmas dizainas visada kairėje apačioje: vieta i → stulpelis i % cols (iš kairės),
 eilė i // cols (iš apačios).
@@ -25,6 +25,7 @@ PRN_DEFAULTS = {
     "print_x": 0.0, "print_y": 0.0,
     "height": 0.0,
     "include_print_offset": True,
+    "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
 }
 
 PRN_CONFIG_DEFAULTS = {
@@ -51,6 +52,7 @@ def model_prn_settings(model):
         except (TypeError, ValueError):
             out[k] = 0.0
     out["include_print_offset"] = bool(out["include_print_offset"])
+    out["output_dir"] = str(out.get("output_dir") or "").strip()
     return out
 
 
@@ -114,20 +116,24 @@ def cm_to_px(cm, dpi):
 def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
     """
     slots: [(vieta, plotis_px, aukštis_px)] – tik užpildyti lizdai, vieta = indeksas stale.
+    Lizdo dydis – didžiausias stalo dizainas (to paties modelio dizainai vienodi), tarp lizdų –
+    konteinerio X/Y tarpas, tad tuščia vieta užima tiek pat, kiek dizainas.
     Grąžina (pozicijos {vieta: (x, y)} – kairysis viršutinis kampas puslapio pikseliais,
              puslapio plotis, aukštis, įspėjimai).
     """
     cols = max(1, int(cols or 1))
     off_x = settings["print_x"] if settings["include_print_offset"] else 0.0
     off_y = settings["print_y"] if settings["include_print_offset"] else 0.0
+    if not slots:
+        return {}, 0, 0, []
+    cell_w = max(w for _, w, _ in slots)
+    cell_h = max(h for _, _, h in slots)
+    gap_x, gap_y = cm_to_px(settings["container_x"], xdpi), cm_to_px(settings["container_y"], ydpi)
+    x0, y0 = cm_to_px(off_x, xdpi), cm_to_px(off_y, ydpi)
     placed = []  # (vieta, x kairė, apačia nuo stalo apačios, w, h) pikseliais
     for idx, w, h in slots:
         col, row = idx % cols, idx // cols
-        x = cm_to_px(off_x + col * settings["container_x"], xdpi)
-        bottom = cm_to_px(off_y + row * settings["container_y"], ydpi)
-        placed.append((idx, x, bottom, w, h))
-    if not placed:
-        return {}, 0, 0, []
+        placed.append((idx, x0 + col * (cell_w + gap_x), y0 + row * (cell_h + gap_y), w, h))
     page_w = max(x + w for _, x, _, w, _ in placed)
     page_h = max(b + h for _, _, b, _, h in placed)
     positions = {idx: (x, page_h - (b + h)) for idx, x, b, w, h in placed}
@@ -139,7 +145,7 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
             ia, xa, ba, wa, ha = by_idx[a]
             ib, xb, bb, wb, hb = by_idx[b]
             if xa < xb + wb and xb < xa + wa and ba < bb + hb and bb < ba + ha:
-                warnings.append(f"Dizainai {ia + 1} ir {ib + 1} persidengia – padidinkite konteinerio X/Y žingsnį.")
+                warnings.append(f"Dizainai {ia + 1} ir {ib + 1} persidengia – padidinkite konteinerio X/Y tarpą.")
     if table_mm:
         tw, th = table_mm
         full_w = page_w / xdpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_x"] * 10)
@@ -203,7 +209,7 @@ def _run_prn_job(plan, progress=None):
     setup = ColorGateSetup.load_bundle(bundle)
     screen = Screen.load(setup.screen)
     settings = plan["prn"]
-    out_dir = plan.get("out_dir") or default_output_dir()
+    out_dir = settings.get("output_dir") or plan.get("out_dir") or default_output_dir()
     os.makedirs(out_dir, exist_ok=True)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M")

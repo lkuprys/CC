@@ -1537,7 +1537,7 @@ class ContainerStudioInterface(QWidget):
             "source_dir": m_data.get("source", "").strip(),
             "file_types": m_data.get("file_types") or [],
             "search_network": m_data.get("search_network", True),
-            "out_dir": cfg.get("output_dir") or prn_job.default_output_dir(),
+            "out_dir": settings["output_dir"] or cfg.get("output_dir") or prn_job.default_output_dir(),
             "bundle_dir": cfg.get("bundle_dir") or "",
             "cols": jig.get("cols", 1),
             "prn": settings,
@@ -2250,8 +2250,9 @@ class ModelsSettingsInterface(QWidget):
         prn_head.addWidget(StrongBodyLabel("Spausdinimo failas (.prn)", parent_widget))
         prn_hint = CaptionLabel(
             "Naudojama mygtukui „Generuoti .prn“ ir tvarkaraščiui. Pirmas dizainas – kairėje apačioje. "
-            "Konteinerio X/Y – žingsnis tarp gretimų dizainų (nuo vieno pradžios iki kito pradžios), "
-            "Print X/Y – kur ant stalo prasideda pirmas dizainas. Visos reikšmės centimetrais.", parent_widget)
+            "Konteineris X/Y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito), "
+            "Print X/Y – kiek dizainai atitraukti nuo stalo kairiojo apatinio kampo. Visos reikšmės centimetrais.",
+            parent_widget)
         prn_hint.setWordWrap(True)
         prn_head.addWidget(prn_hint)
         detail_layout.addLayout(prn_head)
@@ -2262,9 +2263,11 @@ class ModelsSettingsInterface(QWidget):
         for c in range(3):
             prn_form.setColumnStretch(c, 1)
         self.prn_spins = {}
-        for key, label, row, col in (("container_x", "Konteineris X", 0, 0), ("container_y", "Konteineris Y", 0, 1),
+        for key, label, row, col in (("container_x", "Konteineris X (tarpas)", 0, 0),
+                                     ("container_y", "Konteineris Y (tarpas)", 0, 1),
                                      ("height", "Aukštis", 0, 2),
-                                     ("print_x", "Print X", 1, 0), ("print_y", "Print Y", 1, 1)):
+                                     ("print_x", "Print X (atitraukimas)", 1, 0),
+                                     ("print_y", "Print Y (atitraukimas)", 1, 1)):
             spin = DoubleSpinBox(parent_widget, decimals=2, suffix=" cm")
             spin.setRange(0, 250)
             spin.setSingleStep(0.1)
@@ -2277,6 +2280,19 @@ class ModelsSettingsInterface(QWidget):
                                          "nustatomas spausdintuve.")
         self.chk_m_prn_offset.toggled.connect(self.on_model_edited)
         prn_form.addLayout(self._field(parent_widget, "Pradžios taškas", self.chk_m_prn_offset), 1, 2)
+
+        prn_out_row = QHBoxLayout()
+        prn_out_row.setSpacing(8)
+        self.edit_m_prn_out = LineEdit(parent_widget)
+        self.edit_m_prn_out.setPlaceholderText("Bendras aplankas (Nustatymai → Automatinis .prn)")
+        self.edit_m_prn_out.setClearButtonEnabled(True)
+        self.edit_m_prn_out.textChanged.connect(self.on_model_edited)
+        prn_out_row.addWidget(self.edit_m_prn_out, 1)
+        btn_prn_out = PushButton(FIF.FOLDER, "Naršyti…", parent_widget)
+        btn_prn_out.clicked.connect(lambda: self._browse_into(self.edit_m_prn_out, "Pasirinkite šio modelio .prn aplanką"))
+        prn_out_row.addWidget(btn_prn_out)
+        prn_form.addLayout(self._field(parent_widget, "Išvesties aplankas (.prn)", prn_out_row,
+                                       "Kur dėti šio modelio .prn failus. Tuščia – bendras aplankas."), 2, 0, 1, 3)
         detail_layout.addLayout(prn_form)
         detail_layout.addStretch(1)
 
@@ -2544,7 +2560,8 @@ class ModelsSettingsInterface(QWidget):
         btn_out = PushButton(FIF.FOLDER, "Naršyti…", out)
         btn_out.clicked.connect(lambda: self._browse_into(self.edit_prn_out, "Pasirinkite .prn failų aplanką"))
         out_row.addWidget(btn_out)
-        o_lay.addLayout(self._field(out, "Kur dėti .prn failus", out_row,
+        o_lay.addLayout(self._field(out, "Bendras .prn aplankas", out_row,
+                                    "Visiems modeliams, kuriems nenurodytas savas aplankas (Nustatymai → Modeliai). "
                                     "Tuščia – Darbalaukis\\Konteineriai\\PRN. Šalia .prn sukuriama ir .bmp peržiūra."))
 
         table_row = QHBoxLayout()
@@ -2579,7 +2596,8 @@ class ModelsSettingsInterface(QWidget):
 
         layout.addWidget(Notice(
             "info", "Koordinatės nustatomos kiekvienam modeliui",
-            "Nustatymai → Modeliai → „Spausdinimo failas (.prn)“: konteinerio X/Y, print X/Y ir aukštis. "
+            "Nustatymai → Modeliai → „Spausdinimo failas (.prn)“: konteinerio X/Y tarpai, print X/Y atitraukimas, "
+            "aukštis ir (nebūtina) savas išvesties aplankas. "
             "Senas būdas (HotFolderis / laikinas aplankas) veikia kaip anksčiau.", body))
         layout.addStretch(1)
 
@@ -2687,6 +2705,10 @@ class ModelsSettingsInterface(QWidget):
             self.chk_m_prn_offset.blockSignals(True)
             self.chk_m_prn_offset.setChecked(prn["include_print_offset"])
             self.chk_m_prn_offset.blockSignals(False)
+            self.edit_m_prn_out.blockSignals(True)
+            self.edit_m_prn_out.setText(prn["output_dir"])
+            self.edit_m_prn_out.setCursorPosition(0)
+            self.edit_m_prn_out.blockSignals(False)
 
             out_mode = m.get("output_mode", "temp_folder")
             idx_mode = self.combo_m_output_mode.findData(out_mode)
@@ -2736,6 +2758,7 @@ class ModelsSettingsInterface(QWidget):
             m["search_network"] = self.chk_m_network.isChecked()
             prn = {key: round(spin.value(), 2) for key, spin in self.prn_spins.items()}
             prn["include_print_offset"] = self.chk_m_prn_offset.isChecked()
+            prn["output_dir"] = self.edit_m_prn_out.text().strip()
             m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")
 
