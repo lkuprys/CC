@@ -21,6 +21,9 @@ from datetime import datetime
 import podbase_core as core
 from podbase_core import log, BLANK_TOKEN
 
+DEFAULT_PRINTER = "gunsjet"
+CUSTOM_PRINTER = "custom"
+
 PRN_DEFAULTS = {
     "container_x": 0.0, "container_y": 0.0,
     "print_x": 0.0, "print_y": 0.0,
@@ -28,6 +31,7 @@ PRN_DEFAULTS = {
     "include_print_offset": True,
     "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
     "units": "mm",
+    "printer": DEFAULT_PRINTER,
     "origin": "bottom_left",
     "row_direction": "right_to_left",   # kaip Container Studio; arba "left_to_right"
     "table_width": 0.0,        # mm; 0 → stulpelių tiek, kiek rėme
@@ -50,14 +54,22 @@ PRN_LENGTH_KEYS = ("container_x", "container_y", "print_x", "print_y", "height",
 
 PRN_CONFIG_DEFAULTS = {
     "output_dir": "",          # tuščia → Darbalaukis\Konteineriai\PRN
-    "bundle_dir": "",          # tuščia → programos colorgate_prn\bundle_gunsjet
+    "bundle_dir": "",          # papildomas spausdintuvas (bundle aplankas) – modeliuose pasirenkamas kaip „custom“
     "table_width_mm": 2500,
     "table_height_mm": 1300,
     "schedule_enabled": False,
     "schedule_times": [],      # ["07:00", "13:30"]
 }
 
-PRN_EXTENSIONS = {".tif", ".tiff"}
+CMYK_EXTENSIONS = {".tif", ".tiff"}
+RGB_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+
+# Žinomi spausdintuvai (colorgate_prn/bundle_<id>); kiti bundle_* aplankai rodomi pagal pavadinimą
+KNOWN_PRINTERS = {
+    "gunsjet": "GUNSJET 2513 – CMYK TIF + baltas (Productionserver 10)",
+    "flora": "Flora XTRA2512UV – RGB PNG, „POD F2“ (Productionserver 23)",
+}
+
 
 
 def model_prn_settings(model):
@@ -79,6 +91,7 @@ def model_prn_settings(model):
     out["units"] = "mm"
     if out.get("origin") not in PRN_ORIGINS:
         out["origin"] = "bottom_left"
+    out["printer"] = str(out.get("printer") or DEFAULT_PRINTER)
     if out.get("row_direction") not in PRN_ROW_DIRECTIONS:
         out["row_direction"] = "right_to_left"
     out["include_print_offset"] = bool(out["include_print_offset"])
@@ -104,8 +117,49 @@ def default_output_dir():
     return os.path.join(core.DESKTOP_DIR, "PRN")
 
 
+def _bundles_root():
+    return core.get_res_path("colorgate_prn")
+
+
+def available_printers(cfg=None):
+    """{id: pavadinimas} – su programa įdiegti spausdintuvai (bundle_*) ir, jei nurodytas, papildomas aplankas."""
+    out = {}
+    root = _bundles_root()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+    for n in names:
+        if n.startswith("bundle_") and os.path.exists(os.path.join(root, n, "setup.json")):
+            pid = n[len("bundle_"):]
+            out[pid] = KNOWN_PRINTERS.get(pid, pid)
+    custom = (cfg if cfg is not None else prn_config()).get("bundle_dir")
+    if custom:
+        out[CUSTOM_PRINTER] = f"Kitas: {custom}"
+    return out
+
+
+def printer_bundle_dir(printer, cfg=None):
+    """Spausdintuvo bundle aplankas: custom → nustatymų aplankas, kitaip colorgate_prn/bundle_<id>."""
+    if printer == CUSTOM_PRINTER:
+        custom = (cfg if cfg is not None else prn_config()).get("bundle_dir")
+        if custom:
+            return custom
+        printer = DEFAULT_PRINTER
+    return os.path.join(_bundles_root(), f"bundle_{printer or DEFAULT_PRINTER}")
+
+
 def default_bundle_dir():
-    return core.get_res_path(os.path.join("colorgate_prn", "bundle_gunsjet"))
+    return printer_bundle_dir(DEFAULT_PRINTER, {})
+
+
+def printer_name(printer, cfg=None):
+    return available_printers(cfg).get(printer) or KNOWN_PRINTERS.get(printer) or str(printer)
+
+
+def _prepare_numba():
+    """Klaidų difuzijos (Flora) numba talpykla – rašomame programos aplanke (ne įdiegtame _internal)."""
+    os.environ.setdefault("NUMBA_CACHE_DIR", os.path.join(core.BASE_DIR, "numba_cache"))
 
 
 def normalize_times(times):
@@ -276,12 +330,17 @@ def _run_prn_job(plan, progress=None):
     _, matches = core.resolve_plan_files(plan, result, report)
 
     report("Ruošiamas spausdinimo failas...")
-    from colorgate_prn import ColorGateSetup, Job, generate_prn, job_size, Screen
+    _prepare_numba()
+    from colorgate_prn import ColorGateSetup, Job, generate_prn, job_size
+    from colorgate_prn.generator import make_screen
 
-    bundle = plan.get("bundle_dir") or default_bundle_dir()
-    setup = ColorGateSetup.load_bundle(bundle)
-    screen = Screen.load(setup.screen)
     settings = plan["prn"]
+    bundle = plan.get("bundle_dir") or printer_bundle_dir(settings.get("printer"))
+    setup = ColorGateSetup.load_bundle(bundle)
+    screen = make_screen(setup)
+    takes_rgb = bool(setup.rgb_input_profile or setup.rgb_lut)
+    allowed = RGB_EXTENSIONS if takes_rgb else CMYK_EXTENSIONS
+    kinds = "PNG / JPG / TIF" if takes_rgb else "TIF"
     out_dir = settings.get("output_dir") or plan.get("out_dir") or default_output_dir()
     os.makedirs(out_dir, exist_ok=True)
 
@@ -297,15 +356,16 @@ def _run_prn_job(plan, progress=None):
             if not found:
                 result["missing"].append((b["bed_idx"], i, name))
                 continue
-            if os.path.splitext(found)[1].lower() not in PRN_EXTENSIONS:
+            if os.path.splitext(found)[1].lower() not in allowed:
                 result["errors"].append(f"{core.missing_label(name)} (stalas {bed_no}, vieta {i + 1}): "
-                                        f".prn galima sudaryti tik iš TIF failų – rastas {os.path.basename(found)}")
+                                        f"šiam spausdintuvui .prn sudaromas iš {kinds} failų – rastas "
+                                        f"{os.path.basename(found)}")
                 result["missing"].append((b["bed_idx"], i, name))
                 continue
             try:
                 w, h = job_size(found, setup)
             except Exception as e:
-                result["errors"].append(f"{core.missing_label(name)}: nepavyko perskaityti TIF – {e}")
+                result["errors"].append(f"{core.missing_label(name)}: nepavyko perskaityti failo – {e}")
                 result["missing"].append((b["bed_idx"], i, name))
                 continue
             slots.append((i, w, h))
@@ -317,7 +377,7 @@ def _run_prn_job(plan, progress=None):
             result["found"].append((b["bed_idx"], i, name, found, mtime))
 
         if not slots:
-            result["errors"].append(f"Stalas {bed_no}: nėra nei vieno TIF failo – .prn nesukurtas.")
+            result["errors"].append(f"Stalas {bed_no}: nėra nė vieno tinkamo ({kinds}) failo – .prn nesukurtas.")
             continue
 
         positions, page_w, page_h, warns, overflow = layout_bed(slots, plan.get("cols", 1), settings,

@@ -1538,12 +1538,13 @@ class ContainerStudioInterface(QWidget):
             "file_types": m_data.get("file_types") or [],
             "search_network": m_data.get("search_network", True),
             "out_dir": settings["output_dir"] or cfg.get("output_dir") or prn_job.default_output_dir(),
-            "bundle_dir": cfg.get("bundle_dir") or "",
+            "bundle_dir": prn_job.printer_bundle_dir(settings["printer"], cfg),
             "cols": jig.get("cols", 1),
             "prn": settings,
             "table_mm": (float(cfg.get("table_width_mm") or 2500), float(cfg.get("table_height_mm") or 1300)),
             "beds": beds_plan,
             "model_name": m_data.get("name", ""),
+            "printer_name": prn_job.printer_name(settings["printer"], cfg),
         }, None
 
     def generate_prn_file(self, scheduled=False):
@@ -1563,10 +1564,11 @@ class ContainerStudioInterface(QWidget):
         self._prn_context = {
             "scheduled": scheduled,
             "out_dir": plan["out_dir"],
+            "printer_name": plan["printer_name"],
             "beds_snapshot": [[(it or {}).get("name") for it in bed] for bed in self.beds],
         }
         log.info(f".prn generavimas ({'pagal tvarkaraštį' if scheduled else 'rankiniu būdu'}): "
-                 f"{plan['model_name']}, {len(plan['beds'])} stal.")
+                 f"{plan['model_name']}, {plan['printer_name']}, {len(plan['beds'])} stal.")
         self.btn_generate_prn.setEnabled(False)
         self.btn_generate_prn.setText("Generuojama…")
         worker = PrnJobWorker(plan, self)
@@ -1628,7 +1630,8 @@ class ContainerStudioInterface(QWidget):
         summary = "; ".join(f"{os.path.basename(f['path'])} ({f['designs']} diz., {f['width_mm']:.0f}×{f['height_mm']:.0f} mm)"
                             for f in files)
         InfoBar.success(title=".prn sugeneruotas" + (" pagal tvarkaraštį" if ctx.get("scheduled") else ""),
-                        content=f"{summary}\n{ctx.get('out_dir', '')}", orient=Qt.Horizontal, isClosable=True,
+                        content=f"{summary}\n{ctx.get('printer_name', '')}\n{ctx.get('out_dir', '')}",
+                        orient=Qt.Horizontal, isClosable=True,
                         position=InfoBarPosition.TOP_RIGHT, duration=8000, parent=self)
 
 # ----------------- HISTORY INTERFACE -----------------
@@ -2257,6 +2260,14 @@ class ModelsSettingsInterface(QWidget):
         prn_head.addWidget(prn_hint)
         detail_layout.addLayout(prn_head)
 
+        self.combo_m_printer = ComboBox(parent_widget)
+        self.combo_m_printer.currentIndexChanged.connect(self.on_model_edited)
+        self.populate_printer_combo()
+        detail_layout.addLayout(self._field(
+            parent_widget, "Spausdintuvas", self.combo_m_printer,
+            "Pagal kurio spausdintuvo nustatymus generuojamas .prn: spalvos, raiška, kanalai, rastras ir darbo dydis. "
+            "GUNSJET – CMYK TIF failai, Flora – RGB PNG (kiekvienas darbas 200 × 261 mm, pasuktas 180°)."))
+
         prn_form = QGridLayout()
         prn_form.setHorizontalSpacing(16)
         prn_form.setVerticalSpacing(16)
@@ -2603,15 +2614,16 @@ class ModelsSettingsInterface(QWidget):
         bundle_row.setSpacing(8)
         self.edit_prn_bundle = LineEdit(out)
         self.edit_prn_bundle.setText(cfg.get("bundle_dir", ""))
-        self.edit_prn_bundle.setPlaceholderText("Įdiegtas su programa (GUNSJET 2513)")
+        self.edit_prn_bundle.setPlaceholderText("Nebūtina – su programa įdiegti GUNSJET 2513 ir Flora XTRA2512UV")
         self.edit_prn_bundle.setClearButtonEnabled(True)
         bundle_row.addWidget(self.edit_prn_bundle, 1)
         btn_bundle = PushButton(FIF.FOLDER, "Naršyti…", out)
         btn_bundle.clicked.connect(lambda: self._browse_into(self.edit_prn_bundle, "Pasirinkite ColorGATE profilių (bundle) aplanką"))
         bundle_row.addWidget(btn_bundle)
-        o_lay.addLayout(self._field(out, "Spalvų profiliai (bundle)", bundle_row,
-                                    "Keisti nereikia. Nurodykite tik jei ColorGATE nustatymai pasikeitė ir "
-                                    "bundle aplankas sukurtas iš naujo (žr. colorgate_prn/README.md)."))
+        o_lay.addLayout(self._field(out, "Papildomas spausdintuvas (bundle aplankas)", bundle_row,
+                                    "Nebūtina. Nurodžius, modelio nustatymuose atsiranda spausdintuvas „Kitas“ – pvz. "
+                                    "kai ColorGATE nustatymai pasikeitė ir bundle sukurtas iš naujo "
+                                    "(žr. colorgate_prn/README.md)."))
         layout.addWidget(out)
 
         layout.addWidget(Notice(
@@ -2660,6 +2672,16 @@ class ModelsSettingsInterface(QWidget):
         if self.updater:
             repo_slug = self.edit_github_repo.text().strip() or DEFAULT_GITHUB_REPO
             self.updater.check_for_updates(repo_slug=repo_slug, manual=True)
+
+    def populate_printer_combo(self):
+        current = self.combo_m_printer.currentData()
+        self.combo_m_printer.blockSignals(True)
+        self.combo_m_printer.clear()
+        for pid, name in prn_job.available_printers().items():
+            self.combo_m_printer.addItem(name, userData=pid)
+        idx = self.combo_m_printer.findData(current)
+        self.combo_m_printer.setCurrentIndex(idx if idx >= 0 else 0)
+        self.combo_m_printer.blockSignals(False)
 
     def update_jig_combos(self):
         self.combo_m_jig.blockSignals(True)
@@ -2728,6 +2750,13 @@ class ModelsSettingsInterface(QWidget):
             self.combo_m_prn_origin.blockSignals(True)
             self.combo_m_prn_origin.setCurrentIndex(max(0, self.combo_m_prn_origin.findData(prn["origin"])))
             self.combo_m_prn_origin.blockSignals(False)
+            self.combo_m_printer.blockSignals(True)
+            p_idx = self.combo_m_printer.findData(prn["printer"])
+            if p_idx < 0:   # pvz. „Kitas“ aplankas pašalintas iš nustatymų
+                self.combo_m_printer.addItem(prn_job.printer_name(prn["printer"]), userData=prn["printer"])
+                p_idx = self.combo_m_printer.count() - 1
+            self.combo_m_printer.setCurrentIndex(p_idx)
+            self.combo_m_printer.blockSignals(False)
             self.combo_m_prn_rows.blockSignals(True)
             self.combo_m_prn_rows.setCurrentIndex(max(0, self.combo_m_prn_rows.findData(prn["row_direction"])))
             self.combo_m_prn_rows.blockSignals(False)
@@ -2787,6 +2816,7 @@ class ModelsSettingsInterface(QWidget):
             prn["units"] = "mm"
             prn["origin"] = self.combo_m_prn_origin.currentData() or "bottom_left"
             prn["row_direction"] = self.combo_m_prn_rows.currentData() or "right_to_left"
+            prn["printer"] = self.combo_m_printer.currentData() or prn_job.DEFAULT_PRINTER
             prn["output_dir"] = self.edit_m_prn_out.text().strip()
             m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")
@@ -2929,6 +2959,7 @@ class ModelsSettingsInterface(QWidget):
             saved_jig_idx = self.current_jig_idx
 
             self.update_jig_combos()
+            self.populate_printer_combo()
             self.populate_models_table()
             self.populate_jigs_table()
 

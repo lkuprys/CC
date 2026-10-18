@@ -151,3 +151,47 @@ def test_generate_prn_for_bed(core, tmp_path):
     assert hdr.height == px(2, 1200) + 120 + px(10, 1200) + 120
     assert sorted(m[2] for m in res["missing"]) == ["PID-1003", "PID-9"]
     assert any("TIF" in e for e in res["errors"])
+
+
+def test_available_printers_and_bundle_dirs(core, tmp_path):
+    printers = prn_job.available_printers({})
+    assert {"gunsjet", "flora"} <= set(printers)
+    assert prn_job.printer_bundle_dir("flora", {}).endswith(os.path.join("colorgate_prn", "bundle_flora"))
+    assert prn_job.model_prn_settings({"prn": {"units": "mm"}})["printer"] == "gunsjet"   # seni modeliai
+    # Papildomas aplankas iš nustatymų – spausdintuvas „custom“
+    cfg = {"bundle_dir": str(tmp_path / "manobundle")}
+    assert "custom" in prn_job.available_printers(cfg)
+    assert prn_job.printer_bundle_dir("custom", cfg) == str(tmp_path / "manobundle")
+    assert prn_job.printer_bundle_dir("custom", {}).endswith("bundle_gunsjet")
+
+
+def test_generate_prn_for_flora_png(core, tmp_path, monkeypatch):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("numba")
+    from PIL import Image
+    import colorgate_prn
+    from colorgate_prn.prn_format import read_prn
+
+    real_load = colorgate_prn.ColorGateSetup.load_bundle.__func__
+
+    def small_jobs(cls, folder):        # tikras Flora darbas 200 × 261 mm – testui per didelis
+        s = real_load(cls, folder)
+        s.dest_mm = (5.0, 4.0)
+        return s
+    monkeypatch.setattr(colorgate_prn.ColorGateSetup, "load_bundle", classmethod(small_jobs))
+
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir()
+    Image.fromarray(np.full((40, 30, 3), (200, 80, 40), np.uint8)).save(str(src / "1001_flora.png"))
+    Image.fromarray(np.full((40, 30, 3), (20, 120, 220), np.uint8)).save(str(src / "1002_flora.png"))
+    plan = {
+        "source_dir": str(src), "search_network": False, "out_dir": str(out), "cols": 2,
+        "prn": dict(prn_job.PRN_DEFAULTS, printer="flora", container_x=2.0, include_print_offset=False),
+        "beds": [{"bed_idx": 0, "title": "F", "items": ["PID-1001", "PID-1002"]}],
+    }
+    res = prn_job.run_prn_job(plan)
+    assert res["errors"] == [] and len(res["files"]) == 1
+    hdr, levels = read_prn(res["files"][0]["path"])
+    assert (hdr.xdpi, hdr.ydpi, hdr.channels) == (720, 1800, 6)
+    assert hdr.width == px(5, 720) * 2 + px(2, 720)
+    assert levels.any()

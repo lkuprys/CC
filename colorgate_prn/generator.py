@@ -179,10 +179,10 @@ class JobRaster:
         h, w = px.shape[:2]
         self.w, self.h = device_size(w, h, dpi, setup)
         white = next((spots[n] for n in setup.white_spot_names if n in spots), None)
-        planes = px.astype(np.float32)
+        planes = px  # uint8; the resampler converts to float32 per chunk (less memory, same result)
         self.has_white = white is not None and "W" in setup.channels
         if self.has_white:
-            planes = np.concatenate([planes, (255.0 - white.astype(np.float32))[..., None]], axis=2)
+            planes = np.concatenate([planes, (255 - white)[..., None]], axis=2)
         if setup.rotate == 180:
             planes = planes[::-1, ::-1]
         elif setup.rotate:
@@ -226,9 +226,12 @@ def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen=None,
     """Render jobs onto one page and write PRN (+ BMP thumbnail next to it when bmp_path == 'auto')."""
     screen = make_screen(setup, screen)
     pipe = ColorPipeline(setup)
-    rasters = [JobRaster(j, setup, pipe, screen) for j in jobs]
-    W = page_width or max(r.job.x + r.w for r in rasters)
-    H = page_height or max(r.job.y + r.h for r in rasters)
+    # Job sizes come from the image headers; a raster (decoded image + resampler + screen state) exists
+    # only while the strips cross its job, so memory does not grow with the number of jobs on the page.
+    sizes = [job_size(j.tif, setup) for j in jobs]
+    W = page_width or max(j.x + w for j, (w, h) in zip(jobs, sizes))
+    H = page_height or max(j.y + h for j, (w, h) in zip(jobs, sizes))
+    live = {}
     C = len(setup.channels)
     thumb_w = 500
     thumb_h = max(1, int(round(thumb_w * (H / setup.ydpi) / (W / setup.xdpi))))
@@ -237,7 +240,15 @@ def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen=None,
         for y0 in range(0, H, strip):
             y1 = min(H, y0 + strip)
             block = np.zeros((y1 - y0, C, W), np.uint8)
-            for r in rasters:
+            for k, (job, (jw, jh)) in enumerate(zip(jobs, sizes)):
+                if y0 >= job.y + jh:
+                    live.pop(k, None)
+                    continue
+                if y1 <= job.y:
+                    continue
+                if k not in live:
+                    live[k] = JobRaster(job, setup, pipe, screen)
+                r = live[k]
                 jy0, jy1 = max(y0, r.job.y), min(y1, r.job.y + r.h)
                 if jy0 >= jy1:
                     continue
@@ -258,7 +269,7 @@ def generate_prn(jobs, out_path: str, setup: ColorGateSetup, screen=None,
         rgb = np.where(thumb_n[:, :, None] > 0, thumb / np.maximum(thumb_n[:, :, None], 1), 255)
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         Image.fromarray(rgb, "RGB").save(bmp_path, format="BMP")
-    return {"width": W, "height": H, "jobs": [(r.job.tif, r.job.x, r.job.y, r.w, r.h) for r in rasters]}
+    return {"width": W, "height": H, "jobs": [(j.tif, j.x, j.y, w, h) for j, (w, h) in zip(jobs, sizes)]}
 
 
 # rough RGB appearance of each ink at full coverage (for the thumbnail only)

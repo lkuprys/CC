@@ -13,6 +13,8 @@ One state per job carries the error row between strips (create it with new_state
 """
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 try:
@@ -53,7 +55,8 @@ def _diffuse(t, carry, row0, serpentine):
 
 
 if numba is not None:
-    _diffuse = numba.njit(cache=True)(_diffuse)
+    # PyInstaller programoje .py šaltinio nėra, todėl numba talpyklos (cache) naudoti negalima
+    _diffuse = numba.njit(cache=not getattr(sys, "frozen", False))(_diffuse)
 
 
 class ErrorDiffusion:

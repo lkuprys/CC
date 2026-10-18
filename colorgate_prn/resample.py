@@ -37,22 +37,43 @@ def taps(n_in: int, n_out: int):
 
 
 class Resampler:
-    """Upsamples an (H, W, C) image; x pass done once, y pass streamed in strips of output lines."""
+    """Upsamples an (H, W, C) image; x pass computed on demand in the same 256-row chunks as a full pass
+    (bit-identical results), y pass streamed in strips of output lines. Only the chunks the current strip
+    needs are kept, so memory stays small even for large jobs."""
+
+    CHUNK = 256  # chunked to keep the (rows, out_w, 4, C) gather small
 
     def __init__(self, img: np.ndarray, out_w: int, out_h: int, lo: float = 0.0, hi: float = 255.0):
-        img = img.astype(np.float32)
         if img.ndim == 2:
             img = img[..., None]
-        self.in_h, in_w, _ = img.shape
+        self.img = img  # kept in its own dtype; converted to float32 per chunk
+        self.in_h, in_w, self.nc = img.shape
         self.out_w, self.out_h, self.lo, self.hi = out_w, out_h, lo, hi
-        ix, wx = taps(in_w, out_w)
-        self.xpass = np.empty((self.in_h, out_w, img.shape[2]), np.float32)
-        for r in range(0, self.in_h, 256):  # chunked to keep the (rows, out_w, 4, C) gather small
-            self.xpass[r:r + 256] = np.einsum("hjkc,jk->hjc", img[r:r + 256][:, ix, :], wx, optimize=True)
+        self.ix, self.wx = taps(in_w, out_w)
         self.iy, self.wy = taps(self.in_h, out_h)
+        self._chunks = {}
+
+    def _chunk(self, ci: int) -> np.ndarray:
+        if ci not in self._chunks:
+            r = ci * self.CHUNK
+            img = self.img[r:r + self.CHUNK].astype(np.float32)
+            self._chunks[ci] = np.einsum("hjkc,jk->hjc", img[:, self.ix, :], self.wx, optimize=True)
+        return self._chunks[ci]
+
+    def _rows(self, r0: int, r1: int) -> np.ndarray:
+        """x-passed input rows r0..r1-1 (chunks before r0 are dropped: strips go top to bottom)."""
+        c0, c1 = r0 // self.CHUNK, (r1 - 1) // self.CHUNK
+        for ci in [k for k in self._chunks if k < c0]:
+            del self._chunks[ci]
+        parts = [self._chunk(ci) for ci in range(c0, c1 + 1)]
+        rows = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        base = c0 * self.CHUNK
+        return rows[r0 - base:r1 - base]
 
     def lines(self, y0: int, y1: int) -> np.ndarray:
         """Output lines y0..y1-1 as (n, out_w, C) float32, clipped to [lo, hi]."""
-        rows = self.xpass[self.iy[y0:y1]]  # (n, 4, out_w, C)
+        iy = self.iy[y0:y1]
+        r0, r1 = int(iy.min()), int(iy.max()) + 1
+        rows = self._rows(r0, r1)[iy - r0]  # (n, 4, out_w, C)
         out = np.einsum("nkwc,nk->nwc", rows, self.wy[y0:y1], optimize=True)
         return np.clip(out, self.lo, self.hi)

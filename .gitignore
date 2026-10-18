@@ -26,3 +26,8 @@ podbase.log
 podbase.log.*
 scan_index.json
 .pytest_cache/
+
+# numba (Flora klaidų difuzija) talpykla
+numba_cache/
+*.nbi
+*.nbc
