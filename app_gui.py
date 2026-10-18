@@ -766,6 +766,7 @@ class ContainerStudioInterface(QWidget):
                                          "failą (.prn) be ColorGATE. Koordinatės – Nustatymai → Modeliai.")
         self.btn_generate_prn.clicked.connect(lambda: self.generate_prn_file())
         bot_layout.addWidget(self.btn_generate_prn)
+        self.apply_prn_button_visibility()
 
         self.btn_generate = PrimaryPushButton("Sukurti konteinerį", self)
         self.btn_generate.setFixedHeight(48)
@@ -1508,6 +1509,9 @@ class ContainerStudioInterface(QWidget):
 
 
     # ----------------- .prn GENERAVIMAS -----------------
+    def apply_prn_button_visibility(self):
+        self.btn_generate_prn.setVisible(bool(prn_job.prn_config().get("show_button", True)))
+
     def build_prn_plan(self):
         """
         Grąžina (planas, None) arba (None, klaidos tekstas).
@@ -2566,6 +2570,21 @@ class ModelsSettingsInterface(QWidget):
 
         cfg = prn_job.prn_config()
 
+        # Mygtukas pagrindiniame ekrane
+        btn_card = CardWidget(body)
+        b_lay = QVBoxLayout(btn_card)
+        b_lay.setContentsMargins(20, 20, 20, 20)
+        b_lay.setSpacing(12)
+        b_lay.addWidget(SubtitleLabel("Pagrindinis ekranas", btn_card))
+        self.chk_prn_show_button = CheckBox("Rodyti mygtuką „Generuoti .prn“", btn_card)
+        self.chk_prn_show_button.setChecked(bool(cfg.get("show_button", True)))
+        b_lay.addWidget(self.chk_prn_show_button)
+        b_hint = SecondaryLabel("Išjungus mygtukas Container Studio ekrane paslepiamas. Tvarkaraštis veikia ir tada.",
+                                btn_card)
+        b_hint.setWordWrap(True)
+        b_lay.addWidget(b_hint)
+        layout.addWidget(btn_card)
+
         # Tvarkaraštis
         sched = CardWidget(body)
         s_lay = QVBoxLayout(sched)
@@ -2989,6 +3008,7 @@ class ModelsSettingsInterface(QWidget):
                 "bundle_dir": self.edit_prn_bundle.text().strip(),
                 "table_width_mm": self.spin_prn_table_w.value(),
                 "table_height_mm": self.spin_prn_table_h.value(),
+                "show_button": self.chk_prn_show_button.isChecked(),
                 "schedule_enabled": self.chk_prn_schedule.isChecked(),
                 "schedule_times": prn_job.normalize_times(re.split(r"[,;\s]+", self.edit_prn_times.text())),
             })
@@ -3240,6 +3260,7 @@ class MainWindow(QWidget):
         self.studio_interface.update_bed_container_style()
 
     def on_settings_updated(self):
+        self.studio_interface.apply_prn_button_visibility()
         self.studio_interface.load_data()
         self.studio_interface.populate_models_combo()
         self.studio_interface.on_model_changed()

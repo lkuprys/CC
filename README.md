@@ -123,6 +123,7 @@ Programa rašo žurnalą `podbase.log` šalia `.exe` (*Nustatymai → Atnaujinim
     "bundle_dir": "",
     "table_width_mm": 2500,
     "table_height_mm": 1300,
+    "show_button": true,
     "schedule_enabled": false,
     "schedule_times": ["07:00", "13:30"]
   }

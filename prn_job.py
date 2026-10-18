@@ -60,6 +60,7 @@ PRN_CONFIG_DEFAULTS = {
     "bundle_dir": "",          # papildomas spausdintuvas (bundle aplankas) – modeliuose pasirenkamas kaip „custom“
     "table_width_mm": 2500,
     "table_height_mm": 1300,
+    "show_button": True,       # mygtukas „Generuoti .prn“ Container Studio ekrane
     "schedule_enabled": False,
     "schedule_times": [],      # ["07:00", "13:30"]
 }
