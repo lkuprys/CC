@@ -1519,7 +1519,7 @@ class ContainerStudioInterface(QWidget):
         if not m_data:
             return None, "Pasirinkite modelį."
         settings = prn_job.model_prn_settings(m_data)
-        if settings["container_x"] <= 0 and settings["container_y"] <= 0:
+        if not m_data.get("prn"):
             return None, (f"Modeliui „{m_data.get('name', '')}“ nenustatytos .prn koordinatės "
                           "(Nustatymai → Modeliai → Spausdinimo failas).")
         beds_plan = []
@@ -2251,7 +2251,7 @@ class ModelsSettingsInterface(QWidget):
         prn_hint = CaptionLabel(
             "Naudojama mygtukui „Generuoti .prn“ ir tvarkaraščiui. Pirmas dizainas – kairėje apačioje. "
             "Konteineris X/Y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito), "
-            "Print X/Y – kiek dizainai atitraukti nuo stalo kairiojo apatinio kampo. Visos reikšmės centimetrais.",
+            "Print X/Y – kiek dizainai atitraukti nuo stalo kairiojo apatinio kampo. Visos reikšmės milimetrais.",
             parent_widget)
         prn_hint.setWordWrap(True)
         prn_head.addWidget(prn_hint)
@@ -2268,9 +2268,9 @@ class ModelsSettingsInterface(QWidget):
                                      ("height", "Aukštis", 0, 2),
                                      ("print_x", "Print X (atitraukimas)", 1, 0),
                                      ("print_y", "Print Y (atitraukimas)", 1, 1)):
-            spin = DoubleSpinBox(parent_widget, decimals=2, suffix=" cm")
-            spin.setRange(0, 250)
-            spin.setSingleStep(0.1)
+            spin = DoubleSpinBox(parent_widget, decimals=1, suffix=" mm")
+            spin.setRange(0, 2500)
+            spin.setSingleStep(0.5)
             spin.valueChanged.connect(self.on_model_edited)
             self.prn_spins[key] = spin
             prn_form.addLayout(self._field(parent_widget, label, spin), row, col)
@@ -2758,6 +2758,7 @@ class ModelsSettingsInterface(QWidget):
             m["search_network"] = self.chk_m_network.isChecked()
             prn = {key: round(spin.value(), 2) for key, spin in self.prn_spins.items()}
             prn["include_print_offset"] = self.chk_m_prn_offset.isChecked()
+            prn["units"] = "mm"
             prn["output_dir"] = self.edit_m_prn_out.text().strip()
             m["prn"] = prn
             self.model_detail_title.setText(m['name'] or "Modelis")

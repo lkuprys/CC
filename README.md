@@ -131,7 +131,7 @@ Programa rašo žurnalą `podbase.log` šalia `.exe` (*Nustatymai → Atnaujinim
 - `auto_cleanup_minutes` – po kiek minučių ištrinami programos sukurti laikini aplankai. Trinami **tik** programos sukurti aplankai (jie įsimenami faile `temp_folders.json`), jūsų pačių aplankai neliečiami.
 - `api_host` – kur klauso naršyklės plėtinio serveris (5000 prievadas). Numatyta `127.0.0.1` – pasiekiamas tik iš to paties kompiuterio. Jei plėtinys siunčia iš **kito** kompiuterio, įrašykite `"0.0.0.0"` ir plėtinio nustatymuose nurodykite šio kompiuterio IP.
 - `reject_folder` – papildomas brokų aplankas paieškai.
-- `prn` – `.prn` generavimas: `output_dir` (tuščia → `Darbalaukis\Konteineriai\PRN`), `bundle_dir` (tuščia → su programa įdiegti GUNSJET profiliai), stalo dydis ir tvarkaraštis. Modelio koordinatės saugomos `models.json` → `"prn": {"container_x", "container_y", "print_x", "print_y", "height", "include_print_offset", "output_dir"}` (centimetrais; `output_dir` – modelio .prn aplankas, tuščia → bendras).
+- `prn` – `.prn` generavimas: `output_dir` (tuščia → `Darbalaukis\Konteineriai\PRN`), `bundle_dir` (tuščia → su programa įdiegti GUNSJET profiliai), stalo dydis ir tvarkaraštis. Modelio koordinatės saugomos `models.json` → `"prn": {"container_x", "container_y", "print_x", "print_y", "height", "include_print_offset", "output_dir", "units": "mm"}` (milimetrais; senos reikšmės be `units` laikomos centimetrais ir perskaičiuojamos; `output_dir` – modelio .prn aplankas, tuščia → bendras).
 
 ---
 

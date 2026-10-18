@@ -3,7 +3,7 @@
 .prn generavimas be ColorGATE: stalo dizainai išdėstomi pagal modelio koordinates
 ir sudedami į vieną spausdintuvo failą (colorgate_prn paketas).
 
-Koordinatės (kaip ColorGATE konteineryje), centimetrais:
+Koordinatės (kaip ColorGATE konteineryje), milimetrais:
   container_x / container_y – tarpas tarp gretimų dizainų (nuo vieno krašto iki kito krašto),
   print_x / print_y         – kiek visas išdėstymas atitrauktas nuo stalo kairiojo apatinio kampo,
   height                    – spausdinimo aukštis (tik informacija operatoriui).
@@ -26,7 +26,10 @@ PRN_DEFAULTS = {
     "height": 0.0,
     "include_print_offset": True,
     "output_dir": "",          # tuščia → bendras aplankas (config.json → prn.output_dir)
+    "units": "mm",
 }
+
+PRN_LENGTH_KEYS = ("container_x", "container_y", "print_x", "print_y", "height")
 
 PRN_CONFIG_DEFAULTS = {
     "output_dir": "",          # tuščia → Darbalaukis\Konteineriai\PRN
@@ -41,16 +44,22 @@ PRN_EXTENSIONS = {".tif", ".tiff"}
 
 
 def model_prn_settings(model):
-    """Modelio .prn nustatymai su numatytomis reikšmėmis (models.json → "prn")."""
+    """
+    Modelio .prn nustatymai su numatytomis reikšmėmis (models.json → "prn"), ilgiai milimetrais.
+    v1.3.0 reikšmės buvo saugomos centimetrais be "units" – jos paverčiamos milimetrais.
+    """
+    raw = (model or {}).get("prn") or {}
+    scale = 1.0 if raw.get("units") == "mm" else 10.0
     out = dict(PRN_DEFAULTS)
-    for k, v in ((model or {}).get("prn") or {}).items():
+    for k, v in raw.items():
         if k in out:
             out[k] = v
-    for k in ("container_x", "container_y", "print_x", "print_y", "height"):
+    for k in PRN_LENGTH_KEYS:
         try:
-            out[k] = float(out[k])
+            out[k] = round(float(raw.get(k, 0.0)) * scale, 3)
         except (TypeError, ValueError):
             out[k] = 0.0
+    out["units"] = "mm"
     out["include_print_offset"] = bool(out["include_print_offset"])
     out["output_dir"] = str(out.get("output_dir") or "").strip()
     return out
@@ -109,8 +118,8 @@ def due_schedule_time(times, now, last_runs):
 
 
 # ----------------- IŠDĖSTYMAS -----------------
-def cm_to_px(cm, dpi):
-    return int(round(float(cm) * 10.0 / 25.4 * dpi))
+def mm_to_px(mm, dpi):
+    return int(round(float(mm) / 25.4 * dpi))
 
 
 def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
@@ -128,8 +137,8 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
         return {}, 0, 0, []
     cell_w = max(w for _, w, _ in slots)
     cell_h = max(h for _, _, h in slots)
-    gap_x, gap_y = cm_to_px(settings["container_x"], xdpi), cm_to_px(settings["container_y"], ydpi)
-    x0, y0 = cm_to_px(off_x, xdpi), cm_to_px(off_y, ydpi)
+    gap_x, gap_y = mm_to_px(settings["container_x"], xdpi), mm_to_px(settings["container_y"], ydpi)
+    x0, y0 = mm_to_px(off_x, xdpi), mm_to_px(off_y, ydpi)
     placed = []  # (vieta, x kairė, apačia nuo stalo apačios, w, h) pikseliais
     for idx, w, h in slots:
         col, row = idx % cols, idx // cols
@@ -148,8 +157,8 @@ def layout_bed(slots, cols, settings, xdpi, ydpi, table_mm=None):
                 warnings.append(f"Dizainai {ia + 1} ir {ib + 1} persidengia – padidinkite konteinerio X/Y tarpą.")
     if table_mm:
         tw, th = table_mm
-        full_w = page_w / xdpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_x"] * 10)
-        full_h = page_h / ydpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_y"] * 10)
+        full_w = page_w / xdpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_x"])
+        full_h = page_h / ydpi * 25.4 + (0 if settings["include_print_offset"] else settings["print_y"])
         if full_w > tw + 0.5 or full_h > th + 0.5:
             warnings.append(f"Išdėstymas ({full_w:.0f} × {full_h:.0f} mm) netelpa ant stalo ({tw:.0f} × {th:.0f} mm).")
     return positions, page_w, page_h, warnings
