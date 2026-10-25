@@ -993,6 +993,61 @@ def _run_container_job(plan, progress=None):
     return result
 
 
+# ----------------- RĖMO PARUOŠIMAS -----------------
+# Paruošimo dizainai (remo_paruosimas/f1.png ...) įdiegiami kartu su programa; f1 → rėmas „F1“ ir t.t.
+FRAME_PREP_DIR = get_res_path("remo_paruosimas")
+
+
+def frame_prep_files(folder=None):
+    """[(„F1“, kelias), ...] – visi f<skaičius>.png paruošimo failai, surūšiuoti."""
+    folder = folder or FRAME_PREP_DIR
+    out = []
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return out
+    for n in names:
+        m = re.fullmatch(r"f(\d+)\.png", n, re.IGNORECASE)
+        if m:
+            out.append((f"F{int(m.group(1))}", os.path.join(folder, n)))
+    return sorted(out, key=lambda kv: int(kv[0][1:]))
+
+
+def match_prep_jig(key, jigs):
+    """Rėmas, kurio pavadinimas prasideda „F1“ (pvz. „F1 (Kindle)“), arba None."""
+    pat = re.compile(rf"^\s*{re.escape(key)}(?!\d)", re.IGNORECASE)
+    return next((j for j in jigs if pat.match(j.get("name", ""))), None)
+
+
+def jig_capacity(jig):
+    try:
+        return max(0, int(jig.get("rows", 0)) * int(jig.get("cols", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def send_frame_prep(image_path, count, dest_dir, label):
+    """
+    Nukopijuoja paruošimo dizainą `count` kartų į HotFolderį (01_F2_PARUOSIMAS.png, ...).
+    Grąžina įrašytų failų sąrašą. Esami failai neperrašomi (_2, _3...).
+    """
+    if not os.path.isfile(image_path):
+        raise FileNotFoundError(f"Nerastas paruošimo failas: {image_path}")
+    if not dest_dir:
+        raise ValueError("Nenurodytas HotFolderio kelias.")
+    if count <= 0:
+        raise ValueError("Rėme nėra vietų.")
+    os.makedirs(dest_dir, exist_ok=True)
+    clean = safe_folder_name(label, "REMAS")
+    written = []
+    for i in range(1, count + 1):
+        dst = unique_destination(os.path.join(dest_dir, f"{i:02d}_{clean}_PARUOSIMAS.png"))
+        safe_copy_file(image_path, dst)
+        written.append(dst)
+    log.info(f"Rėmo paruošimas {label}: {count} vnt. → {dest_dir}")
+    return written
+
+
 def missing_label(name):
     pid_m = re.search(r'PID[-_:\s]*(\d+)', name or "", re.IGNORECASE)
     return f"PID-{pid_m.group(1)}" if pid_m else (name or "?")

@@ -32,6 +32,8 @@
   - Generavimas pagal tvarkaraštį: *Nustatymai → Automatinis .prn*. Koordinatės – *Nustatymai → Modeliai → Spausdinimo failas (.prn)*.
   - Spausdintuvas parenkamas kiekvienam modeliui (`prn.printer`): `gunsjet` – GUNSJET 2513 (CMYK TIF + W), `flora` – Flora XTRA2512UV (RGB PNG, klaidų difuzija, reikia `numba`). Papildomas bundle aplankas (`prn.bundle_dir` nustatymuose) rodomas kaip „Kitas“. `prn.high_gap` – HighGap režimas (be mažų lašų, tik klaidų difuzijos spausdintuvams; failo pavadinime `_HG`).
   - Rastravimo variklis – `colorgate_prn/` (žr. jo `README.md`). Senas būdas (HotFolderis / laikinas aplankas) veikia kaip anksčiau.
+- **🧽 Rėmo paruošimas:**
+  - Skirtukas *Rėmo paruošimas*: švarus rėmas užpildomas paruošimo dizainu (`remo_paruosimas/f1.png` → rėmas „F1…“, `f2.png` → „F2“, `f3.png` → „F3“) ir visos vietos siunčiamos į pasirinktą HotFolderį (`01_F2_PARUOSIMAS.png` …). Failai įdiegiami kartu su programa; naują rėmą galima pridėti įdėjus `f4.png`.
 - **📜 Užsakymų Istorija ir Greitas Atkūrimas:**
   - Išsaugo visų atliktų generavimų istoriją su galimybe bet kada atkurti ar pergeneruoti užsakymą.
 - **🚀 Automatinis Atnaujinimų Tikrinimas (Auto-Updater):**

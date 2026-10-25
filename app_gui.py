@@ -48,6 +48,7 @@ from podbase_core import (
     install_exception_logging, load_app_config, load_history_data, load_jigs_data,
     load_models_data, log, missing_label, perform_temp_folders_cleanup, run_container_job,
     safe_folder_name, save_app_config, save_history_data, save_jigs_data, save_models_data,
+    frame_prep_files, match_prep_jig, jig_capacity, send_frame_prep,
 )
 from api_server import FlaskServerThread
 import prn_job
@@ -1639,6 +1640,177 @@ class ContainerStudioInterface(QWidget):
                         orient=Qt.Horizontal, isClosable=True,
                         position=InfoBarPosition.TOP_RIGHT, duration=8000, parent=self)
 
+class FramePrepWorker(QThread):
+    finished_ok = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, image, count, dest, label, parent=None):
+        super().__init__(parent)
+        self.args = (image, count, dest, label)
+
+    def run(self):
+        try:
+            self.finished_ok.emit(send_frame_prep(*self.args))
+        except Exception as e:
+            log.warning(f"[rėmo paruošimas] {e}")
+            self.failed.emit(str(e))
+
+
+class FramePrepInterface(QWidget):
+    """Rėmo paruošimas: švarus rėmas užpildomas paruošimo dizainu (f1/f2/f3) ir siunčiamas į HotFolderį."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._worker = None
+        self._rows = []
+        self.init_ui()
+
+    def init_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(16)
+        head = QVBoxLayout()
+        head.setSpacing(4)
+        head.addWidget(TitleLabel("Rėmo paruošimas", self))
+        hint = SecondaryLabel(
+            "Pirmam spausdinimui ant švaraus rėmo: visos rėmo vietos užpildomos paruošimo dizainu ir "
+            "failai siunčiami į pasirinktą HotFolderį. Paruošimo failai įdiegti kartu su programa.", self)
+        hint.setWordWrap(True)
+        head.addWidget(hint)
+        outer.addLayout(head)
+
+        self.list_layout = QVBoxLayout()
+        self.list_layout.setSpacing(12)
+        outer.addLayout(self.list_layout)
+        outer.addStretch(1)
+        self.reload()
+
+    def reload(self):
+        while self.list_layout.count():
+            item = self.list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._rows = []
+        self.jigs = load_jigs_data()
+        self.models = load_models_data()
+        files = frame_prep_files()
+        if not files:
+            self.list_layout.addWidget(Notice("warning", "Nerasti paruošimo failai",
+                                              "Programos aplanke nėra remo_paruosimas\\f1.png ir kt.", self))
+            return
+        for key, path in files:
+            self.list_layout.addWidget(self._make_row(key, path))
+
+    def _make_row(self, key, path):
+        card = CardWidget(self)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(16)
+
+        thumb = QLabel(card)
+        pix = QPixmap(path)
+        if not pix.isNull():
+            thumb.setPixmap(pix.scaled(72, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        thumb.setFixedSize(72, 96)
+        thumb.setAlignment(Qt.AlignCenter)
+        lay.addWidget(thumb)
+
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        info.addWidget(SubtitleLabel(f"Rėmas {key}", card))
+        info.addWidget(CaptionLabel(os.path.basename(path), card))
+        count_lbl = SecondaryLabel("", card)
+        tabular(count_lbl)
+        info.addWidget(count_lbl)
+        info.addStretch(1)
+        lay.addLayout(info)
+        lay.addStretch(1)
+
+        jig_combo = ComboBox(card)
+        jig_combo.setMinimumWidth(200)
+        for j in self.jigs:
+            jig_combo.addItem(f"{j.get('name', 'Rėmas')} · {jig_capacity(j)} vnt.", userData=j.get("id"))
+        matched = match_prep_jig(key, self.jigs)
+        if matched:
+            jig_combo.setCurrentIndex(max(0, jig_combo.findData(matched.get("id"))))
+        lay.addLayout(ModelsSettingsInterface._field(card, "Rėmas", jig_combo))
+
+        hot_combo = ComboBox(card)
+        hot_combo.setMinimumWidth(320)
+        lay.addLayout(ModelsSettingsInterface._field(card, "HotFolderis", hot_combo))
+
+        btn = PrimaryPushButton(FIF.SEND, "Siųsti į HotFolderį", card)
+        btn.setFixedHeight(40)
+        lay.addWidget(btn, 0, Qt.AlignBottom)
+
+        row = {"key": key, "path": path, "jig": jig_combo, "hot": hot_combo, "count": count_lbl, "btn": btn}
+        jig_combo.currentIndexChanged.connect(lambda _=0, r=row: self._refresh_row(r))
+        btn.clicked.connect(lambda _=False, r=row: self._send(r))
+        self._rows.append(row)
+        self._refresh_row(row)
+        return card
+
+    def _selected_jig(self, row):
+        jid = row["jig"].currentData()
+        return next((j for j in self.jigs if j.get("id") == jid), None)
+
+    def _refresh_row(self, row):
+        jig = self._selected_jig(row)
+        n = jig_capacity(jig) if jig else 0
+        row["count"].setText(f"{n} vnt. · {jig.get('rows')} × {jig.get('cols')}" if jig else "Rėmas nepasirinktas")
+        # HotFolderiai – modeliai su šiuo rėmu pirmi, tada visi kiti su nurodyta paskirtimi
+        prev = row["hot"].currentData()
+        row["hot"].blockSignals(True)
+        row["hot"].clear()
+        seen = set()
+        same = [m for m in self.models if jig and m.get("jig_id") == jig.get("id")]
+        for m in same + [m for m in self.models if m not in same]:
+            dest = (m.get("destination") or "").strip()
+            if dest and dest.lower() not in seen:
+                seen.add(dest.lower())
+                row["hot"].addItem(f"{m.get('name', '')} → {dest}", userData=dest)
+        idx = row["hot"].findData(prev)
+        row["hot"].setCurrentIndex(idx if idx >= 0 else 0)
+        row["hot"].blockSignals(False)
+        row["btn"].setEnabled(n > 0 and row["hot"].count() > 0)
+
+    def _send(self, row):
+        if self._worker is not None and self._worker.isRunning():
+            return
+        jig = self._selected_jig(row)
+        dest = row["hot"].currentData()
+        n = jig_capacity(jig) if jig else 0
+        if not dest or n <= 0:
+            return
+        if not confirm(self, f"Siųsti rėmo {row['key']} paruošimą?",
+                       f"{n} vnt. failo {os.path.basename(row['path'])} bus nukopijuota į:\n{dest}",
+                       confirm_text="Siųsti", danger=False):
+            return
+        for r in self._rows:
+            r["btn"].setEnabled(False)
+        row["btn"].setText("Siunčiama…")
+        self._worker = FramePrepWorker(row["path"], n, dest, row["key"], self)
+        self._worker.finished_ok.connect(lambda files, r=row, d=dest: self._done(r, d, files))
+        self._worker.failed.connect(lambda err, r=row: self._failed(r, err))
+        self._worker.start()
+
+    def _restore(self, row):
+        row["btn"].setText("Siųsti į HotFolderį")
+        for r in self._rows:
+            self._refresh_row(r)
+
+    def _done(self, row, dest, files):
+        self._restore(row)
+        InfoBar.success(title=f"Rėmas {row['key']} išsiųstas", content=f"{len(files)} vnt. → {dest}",
+                        orient=Qt.Horizontal, isClosable=True, position=InfoBarPosition.TOP_RIGHT,
+                        duration=5000, parent=self)
+
+    def _failed(self, row, err):
+        self._restore(row)
+        InfoBar.error(title="Nepavyko išsiųsti", content=err, orient=Qt.Horizontal, isClosable=True,
+                      position=InfoBarPosition.TOP_RIGHT, duration=-1, parent=self)
+
+
 # ----------------- HISTORY INTERFACE -----------------
 class HistoryInterface(QWidget):
     load_order_to_studio = Signal(dict)
@@ -3129,6 +3301,9 @@ class MainWindow(QWidget):
         self.history_interface.load_order_to_studio.connect(self.on_load_order_to_studio)
         self.studio_interface.container_generated.connect(self.history_interface.reload_history)
 
+        self.frame_prep_interface = FramePrepInterface(self)
+        self.frame_prep_interface.setObjectName("framePrepInterface")
+
         self.settings_interface = ModelsSettingsInterface(updater=self.updater, parent=self)
         self.settings_interface.setObjectName("settingsInterface")
         self.settings_interface.settings_updated.connect(self.on_settings_updated)
@@ -3222,6 +3397,7 @@ class MainWindow(QWidget):
         self._page_widgets = []
         for title, page in (("Konteineriai", self.studio_interface),
                             ("Istorija", self.history_interface),
+                            ("Rėmo paruošimas", self.frame_prep_interface),
                             ("Nustatymai", self.settings_interface)):
             self.tabs.addTab(title)
             self.pages.addWidget(page)
@@ -3260,6 +3436,7 @@ class MainWindow(QWidget):
         self.studio_interface.update_bed_container_style()
 
     def on_settings_updated(self):
+        self.frame_prep_interface.reload()
         self.studio_interface.apply_prn_button_visibility()
         self.studio_interface.load_data()
         self.studio_interface.populate_models_combo()
@@ -3286,7 +3463,8 @@ class MainWindow(QWidget):
     def closeEvent(self, event):
         running = [w for w in (getattr(self.studio_interface, "_job_worker", None),
                                getattr(self.studio_interface, "_prn_worker", None),
-                               getattr(self.history_interface, "_job_worker", None))
+                               getattr(self.history_interface, "_job_worker", None),
+                               getattr(self.frame_prep_interface, "_worker", None))
                    if w is not None and w.isRunning()]
         if running:
             InfoBar.warning(

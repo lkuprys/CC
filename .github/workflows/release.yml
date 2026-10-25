@@ -75,6 +75,7 @@ jobs:
           --add-data "colorgate_prn/data;colorgate_prn/data"
           --add-data "colorgate_prn/bundle_gunsjet;colorgate_prn/bundle_gunsjet"
           --add-data "colorgate_prn/bundle_flora;colorgate_prn/bundle_flora"
+          --add-data "remo_paruosimas;remo_paruosimas"
           --collect-submodules imagecodecs
           app_gui.py
 
